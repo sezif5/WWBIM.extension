@@ -1,0 +1,12 @@
+title:
+  ru: "Соединить\nконнекторы"
+  en_us: "Connect\nConnectors"
+
+tooltip:
+  ru: Соединяет ближайшие коннекторы выбранных элементов
+  en_us: Connects nearest connectors of selected elements
+author: Vlad
+help_url: "https://sezif5.github.io/WW.BIM.doc/?file=soedinit-konnektory"
+
+min_revit_version: 2020
+max_revit_version: 2024

@@ -1,0 +1,13 @@
+title:
+  ru: "Выровнять\nпо высоте"
+  en_us: "Align\nby Height"
+
+tooltip:
+  ru: Выравнивает выбранные элементы по высоте
+  en_us: Aligns selected elements by height
+
+author: Влад
+help_url: "https://sezif5.github.io/WW.BIM.doc/?file=soedinit-konnektory"
+
+min_revit_version: 2020
+max_revit_version: 2024

@@ -1,0 +1,16 @@
+title: 
+  ru: "Экспорт\nRVT"
+  en_us: "RVT Export"
+
+tooltip:
+  ru: >-
+    Экспортирует выбранные .rvt файлы с Revit-сервера в указанную папку. Файлы открываются в ревите в фоне, отвязываются, пересохраняются в указанную папку.
+   
+  en_us: >-
+    Exports selected .rvt files from the Revit server to the specified folder. Files are opened in Revit in the background, detached, and resaved to the specified folder.
+    
+author: Vlad
+help_url: "Error"
+
+min_revit_version: 2020
+max_revit_version: 2024

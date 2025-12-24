@@ -1,0 +1,17 @@
+title:
+  ru: "Поиск по тексту"
+  en_us: "Search by text"
+
+tooltip:
+  ru: >-
+    Напишите текст для поиска. В первом столбике в найденной строке заполнится "Найдено"
+        .
+  en_us: >-
+    Enter the text to search for. In the first column in the found row, "Found" will be filled in
+        .
+
+author: Vlad
+help_url: "Error"
+
+min_revit_version: 2020
+max_revit_version: 2024

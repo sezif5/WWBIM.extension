@@ -1,0 +1,13 @@
+title: 
+  ru: "Спецификация"
+  en_us: "Specification"
+tooltip: 
+  ru: >-
+    Комплексный инструмент для заполнения параметров девятиграфки и ВОР. Настройки сохраняются локально для каждого пользователя
+  en_us: >-
+    A comprehensive tool for filling in parameters for nine-graphics and WOR parameters. Settings are saved locally for each user.
+author: "Vlad"
+context: doc-project
+assembly: ADSKUpdater.dll
+command: ADSKUpdater.ExternalCommand
+

@@ -1,0 +1,14 @@
+title:
+  ru: "Менеджер\nлистов"
+  en_us: "Sheet\nManager"
+
+tooltip:
+  ru: >- 
+    Нумерует листы, копирует листы опционально с содержимым, заполняет Кол-во листов в комплекте.
+  en_us: >- 
+    Numbers sheets, optionally copies sheets with content, fills in the Number of sheets in the set.
+author: "Vlad"
+context: doc-project
+assembly: CrossPointMEP
+command: CrossPointMEP.ExternalCommand
+

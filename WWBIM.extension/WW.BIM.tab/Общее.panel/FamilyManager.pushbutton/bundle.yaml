@@ -1,5 +1,11 @@
-title: "Family\nManager"
-tooltip: "Менеджер семейств"
+title: 
+  ru: "Менеджер\nсемейств"
+  en_us: "Family\nManager"
+  
+tooltip: 
+  ru: "Показывает либо скрывает панель с менеджером семейств."
+  en_us: "Shows or hides the panel with the family manager."
+
 author: "Vlad"
 context: doc-project
 

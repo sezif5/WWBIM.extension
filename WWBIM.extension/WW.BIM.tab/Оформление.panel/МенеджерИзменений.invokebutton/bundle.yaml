@@ -1,0 +1,10 @@
+title: 
+  ru: "Менеджер\nИзменений"
+  en_us: "Change\nManager"
+tooltip: 
+  ru: "Создайте группы изменений, назначьте изменения листам, получите заполненные рамки листов и ведомость и изменений"
+  en_us: ""
+author: "Vlad"
+context: doc-project
+assembly: ChangeManager.dll
+command: ChangeManager.Command

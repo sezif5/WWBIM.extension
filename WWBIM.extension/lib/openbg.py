@@ -9,6 +9,7 @@ openbg.py — фон. открытие RVT + безопасная подгото
 from Autodesk.Revit.DB import (
     ModelPathUtils, WorksharingUtils, WorksetId,
     OpenOptions, WorksetConfiguration, WorksetConfigurationOption,
+    DetachFromCentralOption,
     BuiltInCategory, Category, ElementId, View3D, ViewFamilyType, ViewFamily, Transaction, FilteredElementCollector
 )
 from System.Collections.Generic import List
@@ -244,7 +245,14 @@ def _hide_categories_by_names(doc, view, names):
 
 # ----------- public API -----------
 
-def open_in_background(app_or_uiapp, maybe_uiapp, model_path_or_str, audit=False, worksets='lastviewed'):
+def open_in_background(app_or_uiapp, maybe_uiapp, model_path_or_str, audit=False, worksets='lastviewed', detach=False):
+    """
+    Открыть документ в фоне.
+    
+    Args:
+        detach: если True — открыть с опцией "Отсоединить с сохранением рабочих наборов"
+                (DetachAndPreserveWorksets)
+    """
     app, uiapp = _coerce_app_uiapp(app_or_uiapp, maybe_uiapp)
     mp = _to_model_path(model_path_or_str)
 
@@ -255,6 +263,13 @@ def open_in_background(app_or_uiapp, maybe_uiapp, model_path_or_str, audit=False
     except Exception: pass
     try: opts.SetOpenWorksetsConfiguration(cfg)
     except Exception: pass
+    
+    # Отсоединить с сохранением рабочих наборов
+    if detach:
+        try:
+            opts.DetachFromCentralOption = DetachFromCentralOption.DetachAndPreserveWorksets
+        except Exception:
+            pass
 
     try:
         return app.OpenDocumentFile(mp, opts)

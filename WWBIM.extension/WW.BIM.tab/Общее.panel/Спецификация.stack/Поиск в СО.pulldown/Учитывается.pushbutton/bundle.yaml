@@ -1,0 +1,14 @@
+title:
+  ru: "В какой спецификации?" 
+  en_us: "In Which Schedule?"
+
+tooltip:
+  ru: >-
+    Выделяет спецификацию, в которой присутствует выбранный элемент модели.
+  en_us: >-
+    Highlights the schedule in which the selected model element is present.
+author: Vlad
+help_url: "Error"
+
+min_revit_version: 2020
+max_revit_version: 2024

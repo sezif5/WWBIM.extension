@@ -1,0 +1,18 @@
+title: 
+  ru: "Цвета\nпо фильтрам"
+  en_us: "Elements in links"
+
+tooltip:
+  ru: >-
+    Создаёт фильтры, легенды, либо переопределяет видимость по параметрам и окрашивает элементы в заданные цвета.
+    Можно выбрать свои цвета либо воспользоваться пресетами.
+   
+  en_us: >-
+    Creates filters, legends, or overrides visibility by parameters and colors elements in specified colors.
+    You can choose your own colors or use presets.
+    
+author: Vlad
+help_url: "Error"
+
+min_revit_version: 2020
+max_revit_version: 2024

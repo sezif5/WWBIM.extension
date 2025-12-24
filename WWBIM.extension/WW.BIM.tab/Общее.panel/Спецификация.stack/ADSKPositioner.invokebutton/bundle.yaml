@@ -1,0 +1,14 @@
+title: 
+  ru: "Позиция"
+  en_us: "Positioner"
+
+tooltip: 
+  ru: >-
+    Нумерация строк в спецификации в зависимости от выбранного режиме. Чтобы нумеровать только выбранные строки выберите их через Shift до запуска плагина
+  en_us: >- 
+    Numbering rows in the schedule depending on the selected mode. To number only the selected rows, select them using Shift before running the plugin
+
+author: "Vlad"
+context: doc-project
+assembly: ADSKPositioner.dll
+command: ADSKPositioner.FillPositionCommand

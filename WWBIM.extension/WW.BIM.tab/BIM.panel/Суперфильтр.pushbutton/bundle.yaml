@@ -5,16 +5,18 @@ title:
 tooltip:
   ru: >-
     Фильтрует элементы в проекте на основе значений параметров.
-
-    Фильтрация элементов по параметрам работает по принципу "ИЛИ".
+    По умолчанию работает по принципу "ИЛИ".
+    Если перед запуском плагина выделены элементы, то первые строки фильтра заполнятся значениями параметров выделенных элементов.
+    Внимание, если в проекте много элементов, выделение может занять продолжительное время.
   en_us: >-
-    Selects elements in the project based on parameter values.
+    Filters elements in the project based on parameter values.
+    By default, it works on the principle of "OR".
+    If elements are selected before running the plugin, the first filter rows will be filled with the parameter values of the selected elements.
+    Attention, if there are many elements in the project, selection may take a long time.
 
-    Filtering elements by parameters works according to the "OR" principle.
 
-
-author: dosymep
-help_url: "https://kb.a101.ru/pages/viewpage.action?pageId=67829991"
+author: Vlad
+help_url: ""
 
 min_revit_version: 2020
 max_revit_version: 2024

@@ -1,0 +1,16 @@
+title: 
+  ru: "Экспорт\nNWC"
+  en_us: "NWC Export"
+
+tooltip:
+  ru: >-
+    Экспортирует выбранные .rvt файлы в формат .nwc в указанную папку. Файлы открываются в ревите в фоне, ищется Navisworks вид, скрываются аннотации и Импорт, выключается 3D подрезка. Если вида нет, то создаётся. 
+   
+  en_us: >-
+    Exports selected .rvt files to .nwc format in the specified folder. Files are opened in Revit in the background, a Navisworks view is searched for, annotations and Imports are hidden, 3D cropping is turned off. If the view does not exist, it is created.
+    
+author: Vlad
+help_url: "Error"
+
+min_revit_version: 2020
+max_revit_version: 2024

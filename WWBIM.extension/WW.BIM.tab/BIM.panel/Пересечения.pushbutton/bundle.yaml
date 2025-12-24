@@ -4,12 +4,14 @@ title:
 
 tooltip:
   ru: >-
-    Если требуется отобразить все доступные коллизии, при выборе проверок нажмите "Выбрать все". Отчет отобразит только те пересечения, ID которых были найдены в открытом документе
-        .
+    Отображает список коллизий. В отчете содержатся только найденные в открытом документе ID элементов. 
+    Два раза одна и то же пересечение не отобразится.
+    Если не выбрать проверки, то будут проанализированы все доступные проверки.
   en_us: >-
-    Test
-    
-    
+    Displays a list of conflicts. The report contains only the IDs of elements found in the open document.
+    The same conflict will not be displayed twice.
+    If no checks are selected, all available checks will be analyzed.
+        
 
 author: Vlad
 help_url: "Error"

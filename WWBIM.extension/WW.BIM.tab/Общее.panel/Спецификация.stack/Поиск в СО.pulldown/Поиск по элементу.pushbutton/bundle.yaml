@@ -1,0 +1,27 @@
+title:
+  ru: "Поиск по выбранному элементу"
+  en_us: "Search by selected element"
+
+tooltip:
+  ru: >-
+    1. Откройте вид спецификации, в которой хотите найти элемент. Других спецификаций не должно быть открыто
+    2. Выберете элемент в модели
+    3. Запустите плагин
+    4. Плагин заполнит в первой колонке спецификации в строке с выбранным элементом значение "Найден". 
+    5. После того как вы нашли стройку с Найдено, можно нажать "Назад" в интерфейсе ревита, чтобы значение параметра вернулось к изначальному.
+    Чтобы открыть окно с дополнительными настройками, нужно запускать скрипт с закрытыми спецификациями.
+        
+  en_us: >-
+    1. Open the schedule view where you want to find the element. No other schedules should be open.
+    2. Select an element in the model.
+    3. Run the plugin.
+    4. The plugin will fill in the first column of the schedule in the row with the selected element with the value "Found".
+    5. After you have found the row with "Found", you can click "Back" in the Revit interface to return the parameter value to its original state.
+    To open the window with additional settings, you need to run the script with closed schedules.
+        
+
+author: Vlad
+help_url: "Error"
+
+min_revit_version: 2020
+max_revit_version: 2024

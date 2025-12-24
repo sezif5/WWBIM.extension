@@ -1,0 +1,19 @@
+title:
+  ru: "Связи по РН" 
+  en_us: "Links by WS"
+
+tooltip:
+  ru: >-
+    Распределяет связи по Рабочим наборам в соответствии со стандартном компании. 
+    Закрепляет связи.
+        .
+  en_us: >-
+    Distributes links by Worksets according to company standards.
+    Fixes links.
+    
+
+author: Vlad
+help_url: "Error"
+
+min_revit_version: 2020
+max_revit_version: 2024

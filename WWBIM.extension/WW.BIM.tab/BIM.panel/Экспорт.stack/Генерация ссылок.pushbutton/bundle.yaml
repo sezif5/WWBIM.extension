@@ -1,0 +1,16 @@
+title: 
+  ru: "Генерация\nссылок"
+  en_us: "Link Generation"
+
+tooltip:
+  ru: >-
+    Создает txt файл со списком всех моделей проекта с Revit сервера. У вас должен быть доступ к Revit серверу в качестве папочной структуры
+   
+  en_us: >-
+    Creates a txt file with a list of all project models from the Revit server. You must have access to the Revit server as a folder structure.
+    
+author: Vlad
+help_url: "Error"
+
+min_revit_version: 2020
+max_revit_version: 2024

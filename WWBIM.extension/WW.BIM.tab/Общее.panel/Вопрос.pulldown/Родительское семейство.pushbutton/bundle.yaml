@@ -1,0 +1,14 @@
+title:
+  ru: "Кто родитель?" 
+  en_us: "Who is Parent?"
+
+tooltip:
+  ru: >-
+    Выделяет родительское семейство для выбранных элементов модели.
+  en_us: >-
+    Highlights the parent family for selected model elements.
+author: Vlad
+help_url: "Error"
+
+min_revit_version: 2020
+max_revit_version: 2024

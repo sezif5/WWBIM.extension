@@ -1,7 +1,0 @@
-title: "AHU"
-tooltip: "AHUComposer"
-author: "Vlad"
-context: doc-project
-assembly: AHUComposer.dll
-command: AHUComposer.ExternalCommand
-

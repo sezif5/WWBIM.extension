@@ -1,0 +1,15 @@
+title:
+  ru: Гильзы
+  en_us: Sleeves
+
+tooltip:
+  ru: >- 
+    Расстановка гильз в модели в местах пересечения систем ВИС и конструктивных элементов здания.
+  en_us: >- 
+    Placement of sleeves in the model at the intersections of MEP systems and structural elements of the building.
+
+author: "Vlad"
+context: doc-project
+assembly: CrossPointMEP
+command: CrossPointMEP.ExternalCommand
+

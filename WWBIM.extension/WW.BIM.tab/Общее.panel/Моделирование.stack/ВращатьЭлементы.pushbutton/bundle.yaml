@@ -1,0 +1,17 @@
+title:
+  ru: "Вращать MEP"
+  en_us: "Rotate MEP"
+
+tooltip:
+  ru: Вращает выбранные элементы MEP вдоль выбранной оси. 
+    1. Выберите элемент для вращения
+    2. Выберите элемент, определяющий ось вращения
+  en_us: Atates selected MEP elements around a chosen axis.
+    1. Select the element to rotate
+    2. Select the element defining the rotation axis
+
+author: Идея ModPlus
+help_url: "https://sezif5.github.io/WW.BIM.doc/?file=soedinit-konnektory"
+
+min_revit_version: 2020
+max_revit_version: 2024

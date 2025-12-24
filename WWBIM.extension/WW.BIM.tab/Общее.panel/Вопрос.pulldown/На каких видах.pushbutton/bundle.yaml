@@ -1,0 +1,14 @@
+title:
+  ru: "На каких видах?" 
+  en_us: "On Which Views?"
+
+tooltip:
+  ru: >-
+    Выделяет виды, на которых присутствуют выбранные элементы модели.
+  en_us: >-
+    Highlights the views on which the selected model elements are present.
+author: Vlad
+help_url: "Error"
+
+min_revit_version: 2020
+max_revit_version: 2024

@@ -1,0 +1,7 @@
+title:
+  ru: "Почему не видно элемент?"
+  en_us: "Why is it not visible?"
+tooltip:
+  ru: "Выберите искомый элемент любым доступным методом (Найдите на другом виде, выберете, перейдите на нужный вид, либо включите режим Показать скрытые элементы), запустите плагин, в отчете будет выделена причина, почему элемент не отображается на виде."
+
+  en_us: "Select the desired element by any available method (Find it on another view, select it, go to the desired view, or enable Show hidden elements mode), run the plugin, and the report will highlight the reason why the element is not visible in the view."

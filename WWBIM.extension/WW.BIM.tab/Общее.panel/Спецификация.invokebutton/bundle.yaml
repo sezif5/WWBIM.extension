@@ -1,7 +1,0 @@
-title: "Спецификация"
-tooltip: "Запуск команды из DLL"
-author: "Vlad"
-context: doc-project
-assembly: ADSKUpdater.dll
-command: ADSKUpdater.ExternalCommand
-

@@ -1,0 +1,18 @@
+title:
+  ru: "+Связи" 
+  en_us: "Add Links"
+
+tooltip:
+  ru: >-
+    Пакетное добавление связей по общим координатам. Не закрепляет связи, не распределяет по РН.
+        .
+  en_us: >-
+    Batch addition of links by shared coordinates. Does not fix links, does not distribute by levels       .
+    
+    
+
+author: Vlad
+help_url: "Error"
+
+min_revit_version: 2020
+max_revit_version: 2024

@@ -17,6 +17,65 @@ doc = revit.doc
 uidoc = revit.uidoc
 active_view = doc.ActiveView
 
+# ---------------- Получаем выделенный элемент ----------------
+def get_preselected_element():
+    """Получить первый выделенный элемент перед запуском плагина"""
+    try:
+        sel_ids = uidoc.Selection.GetElementIds()
+        if sel_ids and sel_ids.Count > 0:
+            for eid in sel_ids:
+                el = doc.GetElement(eid)
+                if el and el.Category and el.Category.CategoryType == CategoryType.Model:
+                    return el
+    except:
+        pass
+    return None
+
+def get_element_category_name(el):
+    """Получить имя категории элемента"""
+    try:
+        if el and el.Category:
+            return _to_unicode(el.Category.Name)
+    except:
+        pass
+    return None
+
+def get_element_family_and_type(el):
+    """Получить строку 'Семейство и типоразмер' элемента"""
+    try:
+        # Ищем параметр "Семейство и типоразмер" (ELEM_FAMILY_AND_TYPE_PARAM)
+        p = el.get_Parameter(BuiltInParameter.ELEM_FAMILY_AND_TYPE_PARAM)
+        if p and p.HasValue:
+            val = p.AsValueString()
+            if val:
+                return _to_unicode(val)
+        # Альтернативный способ - через тип
+        tid = el.GetTypeId()
+        if tid and tid.IntegerValue != -1:
+            typ = doc.GetElement(tid)
+            if typ:
+                # Пытаемся получить имя семейства и типа
+                fam_name = None
+                type_name = None
+                try:
+                    fam_name = typ.FamilyName
+                except:
+                    pass
+                try:
+                    type_name = typ.Name
+                except:
+                    pass
+                if fam_name and type_name:
+                    return u'{0}: {1}'.format(_to_unicode(fam_name), _to_unicode(type_name))
+                elif type_name:
+                    return _to_unicode(type_name)
+    except:
+        pass
+    return None
+
+# Сохраняем выделенный элемент до начала работы
+_preselected_element = get_preselected_element()
+
 # ---------------- Helpers ----------------
 OST_CAMERAS_INT = int(BuiltInCategory.OST_Cameras)
 _PROJECT_DEF_NAMES = None  # кэш имён определений параметров проекта
@@ -48,22 +107,34 @@ def _is_camera(el):
 def _eid_to_disp(eid):
     if not isinstance(eid, ElementId):
         return _to_unicode(eid)
+    # Проверяем категорию
     try:
         cat = Category.GetCategory(doc, eid)
         if cat is not None:
             return _to_unicode(cat.Name)
     except:
         pass
+    # Получаем элемент
     try:
         refel = doc.GetElement(eid)
         if refel:
-            nm = None
+            # Для типоразмеров (FamilySymbol) формируем "Семейство: Тип"
+            fam_name = None
+            type_name = None
             try:
-                nm = refel.Name
+                fam_name = getattr(refel, 'FamilyName', None)
             except:
-                nm = None
-            if nm:
-                return u'{0} [{1}]'.format(_to_unicode(nm), eid.IntegerValue)
+                pass
+            try:
+                type_name = refel.Name
+            except:
+                pass
+            if fam_name and type_name:
+                return u'{0}: {1}'.format(_to_unicode(fam_name), _to_unicode(type_name))
+            elif type_name:
+                return _to_unicode(type_name)
+            elif fam_name:
+                return _to_unicode(fam_name)
     except:
         pass
     return u'Id:{0}'.format(eid.IntegerValue)
@@ -339,131 +410,260 @@ def match_condition(elem, pname, op, raw_value, lookup_in_type):
 clr.AddReference('System.Windows.Forms')
 clr.AddReference('System.Drawing')
 from System.Windows.Forms import (Form, Label, ComboBox, CheckBox, Button, DialogResult,
-                                 FormBorderStyle, ComboBoxStyle, AutoCompleteMode, AutoCompleteSource)
-from System.Drawing import Size, Point
+                                 FormBorderStyle, ComboBoxStyle, AutoCompleteMode, AutoCompleteSource,
+                                 Panel, BorderStyle, FlatStyle, GroupBox, AnchorStyles, FormStartPosition)
+from System.Drawing import Size, Point, Color, Font, FontStyle, ContentAlignment
 
 OPS = [u'=', u'!=', u'пусто', u'не пусто']
 
+# Цвета в стиле референса
+COLOR_ACCENT_BLUE = Color.FromArgb(0, 122, 204)      # Голубой акцент
+COLOR_ACCENT_PINK = Color.FromArgb(233, 30, 99)      # Розовый акцент
+COLOR_BTN_PRIMARY = Color.FromArgb(0, 150, 136)      # Бирюзовый для основных кнопок
+COLOR_BTN_SECONDARY = Color.FromArgb(96, 125, 139)   # Серо-голубой для вторичных
+COLOR_HEADER_BG = Color.FromArgb(245, 245, 245)      # Светлый фон заголовков
+COLOR_ROW_ALT = Color.FromArgb(250, 250, 255)        # Альтернативный цвет строки
+
 class FilterForm(Form):
     def __init__(self):
-        self.Text = u'Суперфильтр (3D/планы/разрезы)'
+        self.Text = u'Суперфильтр'
         self.FormBorderStyle = FormBorderStyle.FixedDialog
         self.MaximizeBox = False
         self.MinimizeBox = False
-        self.ClientSize = Size(830, 470)
+        self.ClientSize = Size(900, 520)
+        self.BackColor = Color.White
+        self.StartPosition = FormStartPosition.CenterScreen
 
-        y = 10
-        self.lblInfo = Label()
-        self.lblInfo.Text = u'Включены: системные, shared и ПАРАМЕТРЫ ПРОЕКТА. Семейст. (не shared) — по кнопке. Камеры исключены.'
-        self.lblInfo.Location = Point(10, y)
-        self.lblInfo.Size = Size(810, 20)
-        self.Controls.Add(self.lblInfo)
+        # Верхняя панель настроек
+        self.pnlHeader = Panel()
+        self.pnlHeader.Location = Point(0, 0)
+        self.pnlHeader.Size = Size(900, 80)
+        self.pnlHeader.BackColor = COLOR_HEADER_BG
+        self.Controls.Add(self.pnlHeader)
 
-        y += 28
+        y = 15
+        self.lblScope = Label()
+        self.lblScope.Text = u'Область поиска:'
+        self.lblScope.Location = Point(15, y)
+        self.lblScope.Size = Size(100, 18)
+        self.lblScope.Font = Font(self.Font.FontFamily, 9, FontStyle.Bold)
+        self.pnlHeader.Controls.Add(self.lblScope)
+
         self.cbOnlyVis = CheckBox()
         self.cbOnlyVis.Text = u'Только видимые на активном виде'
         self.cbOnlyVis.Checked = True
-        self.cbOnlyVis.Location = Point(10, y)
-        self.cbOnlyVis.Size = Size(300, 20)
+        self.cbOnlyVis.Location = Point(120, y-2)
+        self.cbOnlyVis.Size = Size(230, 22)
+        self.cbOnlyVis.BackColor = Color.Transparent
         self.cbOnlyVis.CheckedChanged += self._on_scope_changed
-        self.Controls.Add(self.cbOnlyVis)
+        self.pnlHeader.Controls.Add(self.cbOnlyVis)
 
         self.cbIncludeTypes = CheckBox()
-        self.cbIncludeTypes.Text = u'Включать параметры типов'
+        self.cbIncludeTypes.Text = u'Параметры типов'
         self.cbIncludeTypes.Checked = True
-        self.cbIncludeTypes.Location = Point(330, y)
-        self.cbIncludeTypes.Size = Size(180, 20)
+        self.cbIncludeTypes.Location = Point(360, y-2)
+        self.cbIncludeTypes.Size = Size(140, 22)
+        self.cbIncludeTypes.BackColor = Color.Transparent
         self.cbIncludeTypes.CheckedChanged += self._on_scope_changed
-        self.Controls.Add(self.cbIncludeTypes)
+        self.pnlHeader.Controls.Add(self.cbIncludeTypes)
 
-        self.btnLoadFamily = Button()
-        self.btnLoadFamily.Text = u'Загрузить параметры семейства'
-        self.btnLoadFamily.Location = Point(520, y-2)
-        self.btnLoadFamily.Size = Size(250, 24)
-        self.btnLoadFamily.Click += self._on_load_family
-        self.Controls.Add(self.btnLoadFamily)
-
-        y += 32
         self.lblLogic = Label()
         self.lblLogic.Text = u'Логика:'
-        self.lblLogic.Location = Point(520, y+2)
-        self.lblLogic.Size = Size(50, 18)
-        self.Controls.Add(self.lblLogic)
+        self.lblLogic.Location = Point(520, y)
+        self.lblLogic.Size = Size(55, 18)
+        self.lblLogic.Font = Font(self.Font.FontFamily, 9, FontStyle.Bold)
+        self.pnlHeader.Controls.Add(self.lblLogic)
 
         self.cmbLogic = ComboBox()
         self.cmbLogic.Items.Add(u'ИЛИ')
         self.cmbLogic.Items.Add(u'И')
         self.cmbLogic.SelectedIndex = 0
         self.cmbLogic.DropDownStyle = ComboBoxStyle.DropDownList
-        self.cmbLogic.Location = Point(575, y)
-        self.cmbLogic.Size = Size(80, 21)
-        self.Controls.Add(self.cmbLogic)
+        self.cmbLogic.Location = Point(575, y-3)
+        self.cmbLogic.Size = Size(70, 24)
+        self.pnlHeader.Controls.Add(self.cmbLogic)
 
-        y += 34
+        y += 35
+        self.btnLoadFamily = Button()
+        self.btnLoadFamily.Text = u'⟳ Загрузить параметры семейства'
+        self.btnLoadFamily.Location = Point(15, y)
+        self.btnLoadFamily.Size = Size(250, 28)
+        self.btnLoadFamily.FlatStyle = FlatStyle.Flat
+        self.btnLoadFamily.BackColor = COLOR_BTN_SECONDARY
+        self.btnLoadFamily.ForeColor = Color.White
+        self.btnLoadFamily.FlatAppearance.BorderSize = 0
+        self.btnLoadFamily.Click += self._on_load_family
+        self.pnlHeader.Controls.Add(self.btnLoadFamily)
+
+        # Группа условий фильтрации
+        y = 90
+        self.grpConditions = GroupBox()
+        self.grpConditions.Text = u' Условия фильтрации '
+        self.grpConditions.Location = Point(10, y)
+        self.grpConditions.Size = Size(760, 310)
+        self.grpConditions.Font = Font(self.Font.FontFamily, 9, FontStyle.Bold)
+        self.Controls.Add(self.grpConditions)
+
+        # Заголовки колонок
+        innerY = 22
+        lblHdrParam = Label()
+        lblHdrParam.Text = u'Параметр'
+        lblHdrParam.Location = Point(85, innerY)
+        lblHdrParam.Size = Size(330, 18)
+        lblHdrParam.Font = Font(self.Font.FontFamily, 8, FontStyle.Bold)
+        lblHdrParam.ForeColor = Color.Gray
+        self.grpConditions.Controls.Add(lblHdrParam)
+
+        lblHdrOp = Label()
+        lblHdrOp.Text = u'Оператор'
+        lblHdrOp.Location = Point(420, innerY)
+        lblHdrOp.Size = Size(100, 18)
+        lblHdrOp.Font = Font(self.Font.FontFamily, 8, FontStyle.Bold)
+        lblHdrOp.ForeColor = Color.Gray
+        self.grpConditions.Controls.Add(lblHdrOp)
+
+        lblHdrVal = Label()
+        lblHdrVal.Text = u'Значение'
+        lblHdrVal.Location = Point(535, innerY)
+        lblHdrVal.Size = Size(200, 18)
+        lblHdrVal.Font = Font(self.Font.FontFamily, 8, FontStyle.Bold)
+        lblHdrVal.ForeColor = Color.Gray
+        self.grpConditions.Controls.Add(lblHdrVal)
+
+        innerY += 22
         self.rows = []
         for i in range(5):
-            self._add_row(i+1, y)
-            y += 48
+            self._add_row(i+1, innerY)
+            innerY += 52
 
-        self.btnOk = Button()
-        self.btnOk.Text = u'Фильтровать'
-        self.btnOk.Location = Point(590, self.ClientSize.Height-40)
-        self.btnOk.Size = Size(110, 26)
-        self.btnOk.Click += self._on_ok
-        self.AcceptButton = self.btnOk
-        self.Controls.Add(self.btnOk)
+        # Панель кнопок справа
+        self.pnlButtons = Panel()
+        self.pnlButtons.Location = Point(780, 90)
+        self.pnlButtons.Size = Size(110, 310)
+        self.pnlButtons.BackColor = Color.Transparent
+        self.Controls.Add(self.pnlButtons)
+
+        btnY = 10
+        self.btnSelect5 = Button()
+        self.btnSelect5.Text = u'Выбрать 5 шт'
+        self.btnSelect5.Location = Point(0, btnY)
+        self.btnSelect5.Size = Size(105, 35)
+        self.btnSelect5.FlatStyle = FlatStyle.Flat
+        self.btnSelect5.BackColor = COLOR_BTN_SECONDARY
+        self.btnSelect5.ForeColor = Color.White
+        self.btnSelect5.FlatAppearance.BorderSize = 0
+        self.btnSelect5.Click += self._on_select_5
+        self.pnlButtons.Controls.Add(self.btnSelect5)
+
+        # Нижняя панель
+        self.pnlBottom = Panel()
+        self.pnlBottom.Location = Point(0, 410)
+        self.pnlBottom.Size = Size(900, 110)
+        self.pnlBottom.BackColor = COLOR_HEADER_BG
+        self.Controls.Add(self.pnlBottom)
+
+        # Label для отображения количества
+        self.lblCount = Label()
+        self.lblCount.Text = u''
+        self.lblCount.Location = Point(15, 15)
+        self.lblCount.Size = Size(500, 25)
+        self.lblCount.Font = Font(self.Font.FontFamily, 10, FontStyle.Regular)
+        self.pnlBottom.Controls.Add(self.lblCount)
+
+        self.lblInfo = Label()
+        self.lblInfo.Text = u'Выберите параметры и значения для фильтрации элементов на виде.'
+        self.lblInfo.Location = Point(15, 45)
+        self.lblInfo.Size = Size(600, 20)
+        self.lblInfo.ForeColor = Color.Gray
+        self.pnlBottom.Controls.Add(self.lblInfo)
 
         self.btnCancel = Button()
-        self.btnCancel.Text = u'Отмена'
-        self.btnCancel.Location = Point(710, self.ClientSize.Height-40)
-        self.btnCancel.Size = Size(100, 26)
+        self.btnCancel.Text = u'Закрыть'
+        self.btnCancel.Location = Point(675, 65)
+        self.btnCancel.Size = Size(100, 35)
+        self.btnCancel.FlatStyle = FlatStyle.Flat
+        self.btnCancel.BackColor = COLOR_ACCENT_BLUE
+        self.btnCancel.ForeColor = Color.White
+        self.btnCancel.FlatAppearance.BorderSize = 0
         self.btnCancel.DialogResult = DialogResult.Cancel
         self.CancelButton = self.btnCancel
-        self.Controls.Add(self.btnCancel)
+        self.pnlBottom.Controls.Add(self.btnCancel)
+
+        self.btnOk = Button()
+        self.btnOk.Text = u'Выбрать все'
+        self.btnOk.Location = Point(780, 65)
+        self.btnOk.Size = Size(105, 35)
+        self.btnOk.FlatStyle = FlatStyle.Flat
+        self.btnOk.BackColor = Color.FromArgb(76, 175, 80)  # Зелёный
+        self.btnOk.ForeColor = Color.White
+        self.btnOk.FlatAppearance.BorderSize = 0
+        self.btnOk.Click += self._on_ok
+        self.AcceptButton = self.btnOk
+        self.pnlBottom.Controls.Add(self.btnOk)
 
         self.include_family = False
         self.param_names = []
         self.param_index = {}
         self.values_cache = {}
         self.values_loaded = set()
+        self.last_count = 0  # Последнее посчитанное количество
+        self.last_conditions = []  # Последние условия для подсчёта
 
         self._rebuild_index()
+        self._prefill_from_selection()  # Предзаполнение из выделенного элемента
 
     def _add_row(self, idx, y):
+        # Панель строки с чередующимся фоном
+        rowPanel = Panel()
+        rowPanel.Location = Point(5, y)
+        rowPanel.Size = Size(745, 48)
+        if idx % 2 == 0:
+            rowPanel.BackColor = COLOR_ROW_ALT
+        else:
+            rowPanel.BackColor = Color.White
+        self.grpConditions.Controls.Add(rowPanel)
+
         lbl = Label()
-        lbl.Text = u'Условие %d:' % idx
-        lbl.Location = Point(10, y+6)
-        lbl.Size = Size(80, 20)
-        self.Controls.Add(lbl)
+        lbl.Text = u'%d' % idx
+        lbl.Location = Point(10, 14)
+        lbl.Size = Size(25, 22)
+        lbl.Font = Font(self.Font.FontFamily, 10, FontStyle.Bold)
+        lbl.ForeColor = COLOR_ACCENT_BLUE
+        lbl.TextAlign = ContentAlignment.MiddleCenter
+        rowPanel.Controls.Add(lbl)
 
         cmbP = ComboBox()
         cmbP.DropDownStyle = ComboBoxStyle.DropDown
         cmbP.AutoCompleteMode = AutoCompleteMode.SuggestAppend
         cmbP.AutoCompleteSource = AutoCompleteSource.ListItems
-        cmbP.Location = Point(95, y)
-        cmbP.Size = Size(330, 22)
+        cmbP.Location = Point(45, 12)
+        cmbP.Size = Size(330, 24)
+        cmbP.Font = Font(self.Font.FontFamily, 9, FontStyle.Regular)
         cmbP.SelectedIndexChanged += self._on_param_changed
         cmbP.Tag = idx-1
-        self.Controls.Add(cmbP)
+        rowPanel.Controls.Add(cmbP)
 
         cmbO = ComboBox()
         for o in OPS:
             cmbO.Items.Add(o)
         cmbO.SelectedIndex = 0
         cmbO.DropDownStyle = ComboBoxStyle.DropDownList
-        cmbO.Location = Point(430, y)
-        cmbO.Size = Size(120, 22)
+        cmbO.Location = Point(385, 12)
+        cmbO.Size = Size(110, 24)
+        cmbO.Font = Font(self.Font.FontFamily, 9, FontStyle.Regular)
         cmbO.SelectedIndexChanged += self._on_op_changed
         cmbO.Tag = idx-1
-        self.Controls.Add(cmbO)
+        rowPanel.Controls.Add(cmbO)
 
         cmbV = ComboBox()
         cmbV.DropDownStyle = ComboBoxStyle.DropDownList
-        cmbV.Location = Point(555, y)
-        cmbV.Size = Size(245, 22)
+        cmbV.Location = Point(505, 12)
+        cmbV.Size = Size(230, 24)
+        cmbV.Font = Font(self.Font.FontFamily, 9, FontStyle.Regular)
         cmbV.DropDown += self._on_value_dropdown
+        cmbV.SelectedIndexChanged += self._on_value_changed
         cmbV.Tag = idx-1
-        self.Controls.Add(cmbV)
+        rowPanel.Controls.Add(cmbV)
 
         self.rows.append((cmbP, cmbO, cmbV))
 
@@ -490,6 +690,69 @@ class FilterForm(Form):
                 cmbP.Items.Add(n)
             cmbP.SelectedIndex = -1
             cmbV.Items.Clear()
+
+    def _prefill_from_selection(self):
+        """Предзаполнение фильтра на основе выделенного элемента"""
+        global _preselected_element
+        if _preselected_element is None:
+            return
+        
+        el = _preselected_element
+        
+        # Строка 1: Категория
+        cat_name = get_element_category_name(el)
+        if cat_name:
+            cat_param_name = u'Категория'
+            if cat_param_name in self.param_names:
+                cmbP1, cmbO1, cmbV1 = self.rows[0]
+                cmbP1.Text = cat_param_name
+                # Загружаем значения для этого параметра
+                self._load_values_for_row(0)
+                # Устанавливаем значение категории
+                for i in range(cmbV1.Items.Count):
+                    if _to_unicode(cmbV1.Items[i]) == cat_name:
+                        cmbV1.SelectedIndex = i
+                        break
+        
+        # Строка 2: Семейство и типоразмер
+        fam_type = get_element_family_and_type(el)
+        if fam_type:
+            fam_param_name = u'Семейство и типоразмер'
+            if fam_param_name in self.param_names:
+                cmbP2, cmbO2, cmbV2 = self.rows[1]
+                cmbP2.Text = fam_param_name
+                # Загружаем значения для этого параметра
+                self._load_values_for_row(1)
+                # Устанавливаем значение семейства и типоразмера
+                for i in range(cmbV2.Items.Count):
+                    if _to_unicode(cmbV2.Items[i]) == fam_type:
+                        cmbV2.SelectedIndex = i
+                        break
+        
+        # Обновляем счётчик
+        self._update_count()
+
+    def _load_values_for_row(self, row):
+        """Загрузить значения для параметра в строке"""
+        cmbP, cmbO, cmbV = self.rows[row]
+        pname = _to_unicode(cmbP.Text)
+        if not pname:
+            return
+        if pname in self.values_loaded:
+            return
+        only_vis = bool(self.cbOnlyVis.Checked)
+        include_types = bool(self.cbIncludeTypes.Checked)
+        storage = self.param_index.get(pname, None)
+        if storage is None:
+            return
+        disp_list, mapping, has_empty = collect_values_for_param(
+            pname, storage, only_vis, include_types, self.include_family
+        )
+        self.values_cache[pname] = {'disp_list': disp_list, 'map': mapping, 'has_empty': has_empty}
+        self.values_loaded.add(pname)
+        cmbV.Items.Clear()
+        for v in disp_list:
+            cmbV.Items.Add(v)
 
     def _on_param_changed(self, sender, args):
         row = int(sender.Tag)
@@ -526,6 +789,33 @@ class FilterForm(Form):
     def _on_op_changed(self, sender, args):
         row = int(sender.Tag)
         self._sync_value_enabled(row)
+        self._update_count()
+
+    def _on_value_changed(self, sender, args):
+        """Callback при изменении значения - автоподсчёт"""
+        self._update_count()
+
+    def _update_count(self):
+        """Автоматический подсчёт элементов при изменении условий"""
+        conds = self._get_conditions()
+        if not conds:
+            self.lblCount.Text = u''
+            return
+        
+        only_vis = bool(self.cbOnlyVis.Checked)
+        lookup_in_type = True
+        use_or = (_to_unicode(self.cmbLogic.Text) == u'ИЛИ')
+        
+        count = self._count_matches(conds, only_vis, lookup_in_type, use_or)
+        self.last_count = count
+        self.last_conditions = conds
+        
+        if count == 0:
+            self.lblCount.Text = u'Элементов не найдено'
+            self.lblCount.ForeColor = Color.Gray
+        else:
+            self.lblCount.Text = u'Будет выбрано элементов: {0}'.format(count)
+            self.lblCount.ForeColor = COLOR_ACCENT_BLUE
 
     def _sync_value_enabled(self, row):
         cmbP, cmbO, cmbV = self.rows[row]
@@ -533,7 +823,8 @@ class FilterForm(Form):
         need_val = op not in (u'пусто', u'не пусто')
         cmbV.Enabled = need_val
 
-    def _on_ok(self, sender, args):
+    def _get_conditions(self):
+        """Получить список условий из формы"""
         conds = []
         for cmbP, cmbO, cmbV in self.rows:
             pname = _to_unicode(cmbP.Text).strip()
@@ -558,7 +849,40 @@ class FilterForm(Form):
                     self.values_cache[pname] = cache
                 raw = cache['map'].get(disp, disp)
             conds.append((pname, op, raw))
+        return conds
 
+    def _count_matches(self, conditions, only_vis, lookup_in_type, use_or):
+        """Подсчитать количество подходящих элементов"""
+        elems = collect_candidates(only_vis)
+        count = 0
+        out = script.get_output()
+        try:
+            pb = out.create_progress_bar(len(elems), title=u'Подсчёт элементов...')
+        except:
+            pb = None
+        try:
+            for el in elems:
+                if pb: pb.update()
+                if _is_camera(el):
+                    continue
+                flags = []
+                for (pname, op, raw) in conditions:
+                    ok = match_condition(el, pname, op, raw, lookup_in_type)
+                    flags.append(ok)
+                    if use_or and ok:
+                        break
+                    if (not use_or) and (not ok):
+                        break
+                res = any(flags) if use_or else all(flags)
+                if res:
+                    count += 1
+        finally:
+            if pb: pb.close()
+        return count
+
+    def _on_select_5(self, sender, args):
+        """Обработчик кнопки выбора 5 элементов"""
+        conds = self._get_conditions()
         if not conds:
             from pyrevit import forms
             forms.alert(u'Не выбрано ни одного условия.', title=u'Суперфильтр')
@@ -568,7 +892,25 @@ class FilterForm(Form):
             'conditions': conds,
             'onlyvis': bool(self.cbOnlyVis.Checked),
             'search_types': True,
-            'logic': _to_unicode(self.cmbLogic.Text)
+            'logic': _to_unicode(self.cmbLogic.Text),
+            'limit': 5
+        }
+        self.DialogResult = DialogResult.OK
+        self.Close()
+
+    def _on_ok(self, sender, args):
+        conds = self._get_conditions()
+        if not conds:
+            from pyrevit import forms
+            forms.alert(u'Не выбрано ни одного условия.', title=u'Суперфильтр')
+            return
+
+        self.values = {
+            'conditions': conds,
+            'onlyvis': bool(self.cbOnlyVis.Checked),
+            'search_types': True,
+            'logic': _to_unicode(self.cmbLogic.Text),
+            'limit': None
         }
         self.DialogResult = DialogResult.OK
         self.Close()
@@ -586,6 +928,7 @@ def main():
     only_vis = ui['onlyvis']
     lookup_in_type = ui['search_types']
     use_or = (ui['logic'] == u'ИЛИ')
+    limit = ui.get('limit', None)
 
     elems = collect_candidates(only_vis)
     matched_ids = []
@@ -612,6 +955,9 @@ def main():
             res = any(flags) if use_or else all(flags)
             if res:
                 matched_ids.append(el.Id)
+                # Если установлен лимит и достигнут - прерываем поиск
+                if limit and len(matched_ids) >= limit:
+                    break
     finally:
         if pb: pb.close()
 
@@ -629,8 +975,10 @@ def main():
         pass
 
     from pyrevit import forms
-    forms.alert(u'Найдено и выбрано элементов: {0}'.format(len(matched_ids)),
-                title=u'Суперфильтр', warn_icon=False)
+    msg = u'Найдено и выбрано элементов: {0}'.format(len(matched_ids))
+    if limit:
+        msg += u' (ограничение: {0})'.format(limit)
+    forms.alert(msg, title=u'Суперфильтр', warn_icon=False)
 
 if __name__ == '__main__':
     main()

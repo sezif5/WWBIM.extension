@@ -1,0 +1,17 @@
+title:
+  ru: "Выделить в связи по ID" 
+  en_us: "Elements in links"
+
+tooltip:
+  ru: >-
+    1. Введите ID элемента из связанного файла
+    2. 3D вид будет подрезан по элементу
+  en_us: >-
+    1. Enter the ID of an element from a linked file
+    2. The 3D view will be cropped to the element   
+
+author: Vlad
+help_url: "Error"
+
+min_revit_version: 2020
+max_revit_version: 2024

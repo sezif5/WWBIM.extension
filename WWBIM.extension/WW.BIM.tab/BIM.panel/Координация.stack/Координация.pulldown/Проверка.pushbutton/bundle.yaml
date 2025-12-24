@@ -1,0 +1,18 @@
+title:
+  ru: "Инспектор" 
+  en_us: "Inspector"
+
+tooltip:
+  ru: >-
+    Проверка модели на наличие ошибок и несоответствий
+        .
+  en_us: >-
+    Model check for errors and inconsistencies
+    
+    
+
+author: Vlad
+help_url: "Error"
+
+min_revit_version: 2020
+max_revit_version: 2024

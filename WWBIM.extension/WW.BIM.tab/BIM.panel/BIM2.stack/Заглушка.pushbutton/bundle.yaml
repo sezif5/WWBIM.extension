@@ -1,0 +1,14 @@
+title:
+  ru: "Заглушка"
+  en_us: "Placeholder"
+
+tooltip:
+  ru: >-
+    Заглушка для кнопок, которые еще в разработке.
+  en_us: >-
+    Placeholder for buttons that are still in development.
+author: Vlad
+help_url: ""
+
+min_revit_version: 2020
+max_revit_version: 2024

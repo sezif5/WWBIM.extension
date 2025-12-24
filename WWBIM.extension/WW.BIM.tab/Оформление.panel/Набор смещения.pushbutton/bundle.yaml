@@ -1,0 +1,13 @@
+title:
+  ru: "Набор\nсмещения"
+  en_us: "Displacement\nSet"
+
+tooltip:
+  ru: Создание отдельного вида для выделенных элементов и присваивание им номера узла 
+  en_us: Create a separate view for selected elements and assign them a node number
+
+author: Влад
+help_url: ""
+
+min_revit_version: 2020
+max_revit_version: 2024

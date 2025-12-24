@@ -1,0 +1,19 @@
+title:
+  ru: "Получить ID в связи" 
+  en_us: "Elements in links"
+
+tooltip:
+  ru: >-
+    1. Запустите плагин
+    2. Выделите элемент из связи
+    3. ID выделенного элемента скопируется в буфер обмена
+  en_us: >-
+    1. Run the plugin
+    2. Select an element from the link
+    3. The ID of the selected element will be copied to the clipboard 
+    
+author: Vlad
+help_url: "Error"
+
+min_revit_version: 2020
+max_revit_version: 2024

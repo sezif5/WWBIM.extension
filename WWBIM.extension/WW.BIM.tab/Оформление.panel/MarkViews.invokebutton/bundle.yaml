@@ -1,0 +1,10 @@
+title: 
+  ru: "Оформление"
+  en_us: "Marking"
+tooltip: 
+  ru: "В разработке"
+  en_us: "In development"
+author: "Vlad"
+context: doc-project
+assembly: MarkViews.dll
+command: MarkViews.ExternalCommand

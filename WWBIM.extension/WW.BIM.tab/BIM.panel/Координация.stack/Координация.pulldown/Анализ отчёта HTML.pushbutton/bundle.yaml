@@ -1,0 +1,27 @@
+title:
+  ru: "Анализ XML отчёта в HTML" 
+  en_us: "HTML Analytics"
+
+tooltip:
+  ru: >-
+    Визуализация XML отчета из Navisworks. 
+    Выберете XML файл отчета, плагин сформирует интерактивный HTML файл-аналитику и положит рядом.
+    Вкладка Аналитика отображает статистику по всех отфильтрованных пересечений
+    Вкладка Список пересечений отображает таблицу всех отфильтрованных пересечений
+    Вкладка Динамика отображает отчёты до недельной давности с тем же именем на уровень выше (все подпапки), берёт дату изменения, и строит графики по датам с учётом текущих фильтров
+        .
+  en_us: >-
+    Visualization of the XML report from Navisworks.
+    Select the XML report file, the plugin will generate an interactive HTML analytics file and place it next to it.
+    The Analytics tab displays statistics for all filtered clashes
+    The Clash List tab displays a table of all filtered clashes
+    The Dynamics tab displays reports up to a week old with the same name one level higher (all subfolders), takes the modification date, and builds graphs by dates taking into account current filters
+        .
+    
+    
+
+author: Vlad
+help_url: "Error"
+
+min_revit_version: 2020
+max_revit_version: 2024
