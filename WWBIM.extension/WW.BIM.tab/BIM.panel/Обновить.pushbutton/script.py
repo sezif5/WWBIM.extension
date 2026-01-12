@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Обновить плагин WW.BIM из GitHub"""
+"""Обновить плагин WW.BIM из GitHub (без version.txt)"""
+
 __title__ = "Обновить\nплагин"
 __author__ = "WW.BIM"
 __doc__ = "Скачивает последнюю версию плагина с GitHub"
@@ -8,33 +9,32 @@ import os
 import sys
 import shutil
 import zipfile
+from datetime import datetime
 
 from pyrevit import script, forms
 
 # Python 2/3 совместимость
 if sys.version_info[0] >= 3:
     from urllib.request import urlretrieve, urlopen
+    from urllib.error import URLError
 else:
     from urllib import urlretrieve
-    from urllib2 import urlopen
+    from urllib2 import urlopen, URLError
 
 # ============ НАСТРОЙКИ ============
 GITHUB_USER = "sezif5"
 GITHUB_REPO = "WW.BIM"
-BRANCH = "main"  # или "master" - проверьте в вашем репо
-# Название папки extension (измените если отличается)
+BRANCH = "main"
 EXTENSION_NAME = "WW.BIM.extension"
 # ===================================
 
 
 def get_extension_path():
-    """Получаем путь к папке extension"""
     script_path = os.path.dirname(__file__)
     ext_path = script_path
 
-    # Поднимаемся вверх пока не найдем .extension
     for _ in range(10):
-        if ext_path.endswith('.extension'):
+        if ext_path.endswith(".extension"):
             return ext_path
         parent = os.path.dirname(ext_path)
         if parent == ext_path:
@@ -44,41 +44,58 @@ def get_extension_path():
     return None
 
 
-def get_local_version(ext_path):
-    """Читаем локальную версию из version.txt"""
-    version_file = os.path.join(ext_path, 'version.txt')
-    if os.path.exists(version_file):
-        with open(version_file, 'r') as f:
+def get_local_last_update(ext_path):
+    """Читаем дату последнего обновления из last_update.txt"""
+    last_update_file = os.path.join(ext_path, "last_update.txt")
+    if os.path.exists(last_update_file):
+        with open(last_update_file, "r") as f:
             return f.read().strip()
-    return "0.0.0"
+    return None
 
 
-def get_remote_version():
-    """Получаем версию с GitHub"""
-    url = "https://raw.githubusercontent.com/{}/{}/{}/version.txt".format(
+def get_remote_commit_date():
+    """Получаем дату последнего коммита из GitHub API"""
+    url = "https://api.github.com/repos/{}/{}/commits/{}".format(
         GITHUB_USER, GITHUB_REPO, BRANCH
     )
     try:
         response = urlopen(url, timeout=10)
-        return response.read().decode('utf-8').strip()
+        import json
+
+        data = json.loads(response.read().decode("utf-8"))
+        commit_date = data["commit"]["committer"]["date"]
+        return commit_date
     except:
-        # Пробуем ветку master если main не сработал
-        try:
-            url = url.replace('/main/', '/master/')
-            response = urlopen(url, timeout=10)
-            return response.read().decode('utf-8').strip()
-        except:
-            return None
+        return None
+
+
+def compare_dates(remote_date, local_date):
+    """Сравниваем даты - возвращает True если remote новее"""
+    if not local_date:
+        return True
+
+    try:
+        remote = datetime.strptime(remote_date, "%Y-%m-%dT%H:%M:%SZ")
+        local = datetime.strptime(local_date, "%Y-%m-%dT%H:%M:%SZ")
+        return remote > local
+    except:
+        return True
+
+
+def save_last_update(ext_path, date):
+    """Сохраняем дату последнего обновления"""
+    last_update_file = os.path.join(ext_path, "last_update.txt")
+    with open(last_update_file, "w") as f:
+        f.write(date)
 
 
 def download_update(ext_path):
     """Скачиваем и устанавливаем обновление"""
-    temp_dir = os.environ.get('TEMP', os.environ.get('TMP', '/tmp'))
-    zip_path = os.path.join(temp_dir, 'wwbim_update.zip')
-    extract_path = os.path.join(temp_dir, 'wwbim_update')
+    temp_dir = os.environ.get("TEMP", os.environ.get("TMP", "/tmp"))
+    zip_path = os.path.join(temp_dir, "wwbim_update.zip")
+    extract_path = os.path.join(temp_dir, "wwbim_update")
 
-    # Пробуем main, потом master
-    for branch in [BRANCH, 'master', 'main']:
+    for branch in [BRANCH, "master", "main"]:
         zip_url = "https://github.com/{}/{}/archive/refs/heads/{}.zip".format(
             GITHUB_USER, GITHUB_REPO, branch
         )
@@ -92,46 +109,40 @@ def download_update(ext_path):
         return False, "Не удалось скачать обновление. Проверьте интернет."
 
     try:
-        # Очищаем старую временную папку
         if os.path.exists(extract_path):
             shutil.rmtree(extract_path)
 
-        # Распаковываем ZIP
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
             zip_ref.extractall(extract_path)
 
-        # GitHub создает папку repo-branch
         extracted_folder = os.path.join(
-            extract_path,
-            "{}-{}".format(GITHUB_REPO, used_branch)
+            extract_path, "{}-{}".format(GITHUB_REPO, used_branch)
         )
 
-        # Ищем папку extension внутри архива
         source_ext = None
-
-        # Вариант 1: extension в подпапке
         possible_ext = os.path.join(extracted_folder, EXTENSION_NAME)
         if os.path.exists(possible_ext):
             source_ext = possible_ext
         else:
-            # Вариант 2: ищем любую папку .extension
             for item in os.listdir(extracted_folder):
-                if item.endswith('.extension'):
+                if item.endswith(".extension"):
                     source_ext = os.path.join(extracted_folder, item)
                     break
 
-        # Вариант 3: extension в корне репозитория
         if not source_ext:
             source_ext = extracted_folder
 
-        # Файлы которые не перезаписываем (пользовательские настройки)
-        skip_files = ['user_config.json', 'local_settings.py', '.user']
+        skip_files = [
+            "user_config.json",
+            "local_settings.py",
+            ".user",
+            "last_update.txt",
+        ]
 
-        # Копируем файлы
         for item in os.listdir(source_ext):
             if item in skip_files:
                 continue
-            if item.startswith('.git'):
+            if item.startswith(".git"):
                 continue
 
             src = os.path.join(source_ext, item)
@@ -147,7 +158,6 @@ def download_update(ext_path):
             except Exception as e:
                 print("Не удалось скопировать {}: {}".format(item, e))
 
-        # Очистка временных файлов
         try:
             os.remove(zip_path)
             shutil.rmtree(extract_path)
@@ -161,7 +171,6 @@ def download_update(ext_path):
 
 
 def force_update(ext_path):
-    """Принудительное обновление без проверки версии"""
     with forms.ProgressBar(title="Скачивание обновления...") as pb:
         pb.update_progress(20, 100)
         success, message = download_update(ext_path)
@@ -170,65 +179,66 @@ def force_update(ext_path):
 
 
 # ============ ГЛАВНЫЙ КОД ============
-if __name__ == '__main__':
+if __name__ == "__main__":
     ext_path = get_extension_path()
 
     if not ext_path:
-        # Если не удалось определить путь автоматически
-        # Пользователь может указать вручную
         ext_path = forms.pick_folder(title="Выберите папку плагина (.extension)")
         if not ext_path:
             forms.alert("Путь к плагину не выбран", exitscript=True)
 
-    local_ver = get_local_version(ext_path)
-    remote_ver = get_remote_version()
+    local_date = get_local_last_update(ext_path)
+    remote_date = get_remote_commit_date()
 
-    # Если не удалось получить версию с сервера
-    if not remote_ver:
+    if not remote_date:
         if forms.alert(
-            "Не удалось проверить версию на сервере.\n\n"
-            "Текущая версия: {}\n\n"
-            "Выполнить принудительное обновление?".format(local_ver),
-            yes=True, no=True
+            "Не удалось проверить дату коммита на сервере.\n\n"
+            "Последнее обновление: {}\n\n"
+            "Выполнить принудительное обновление?".format(local_date or "неизвестно"),
+            yes=True,
+            no=True,
         ):
             success, message = force_update(ext_path)
             if success:
+                remote_date = get_remote_commit_date()
+                if remote_date:
+                    save_last_update(ext_path, remote_date)
                 forms.alert(
-                    "{}\n\nПерезапустите Revit для применения изменений.".format(message)
+                    "{}\n\nПерезапустите Revit для применения изменений.".format(
+                        message
+                    )
                 )
             else:
                 forms.alert(message, warn_icon=True)
         sys.exit()
 
-    # Сравниваем версии
-    if remote_ver <= local_ver:
+    if not compare_dates(remote_date, local_date):
         result = forms.alert(
-            "У вас актуальная версия: {}\n\n"
-            "Обновление не требуется.\n\n"
-            "Выполнить принудительное обновление?".format(local_ver),
-            yes=True, no=True
+            "У вас актуальная версия\n\n"
+            "Последнее обновление: {}\n\n"
+            "Выполнить принудительное обновление?".format(local_date or "неизвестно"),
+            yes=True,
+            no=True,
         )
         if not result:
             sys.exit()
     else:
-        # Есть новая версия
         result = forms.alert(
-            "Доступна новая версия!\n\n"
-            "Текущая: {}\n"
-            "Новая: {}\n\n"
-            "Установить обновление?".format(local_ver, remote_ver),
-            yes=True, no=True
+            "Доступно обновление!\n\n"
+            "Дата последнего коммита: {}\n\n"
+            "Установить обновление?".format(remote_date),
+            yes=True,
+            no=True,
         )
         if not result:
             sys.exit()
 
-    # Выполняем обновление
     success, message = force_update(ext_path)
 
     if success:
+        save_last_update(ext_path, remote_date)
         forms.alert(
-            "{}\n\n"
-            "Перезапустите Revit для применения изменений.".format(message)
+            "{}\n\nПерезапустите Revit для применения изменений.".format(message)
         )
     else:
         forms.alert(message, warn_icon=True)
