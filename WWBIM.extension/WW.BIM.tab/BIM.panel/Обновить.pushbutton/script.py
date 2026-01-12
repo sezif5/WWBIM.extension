@@ -263,7 +263,11 @@ def main():
 
     if success:
         save_last_update(ext_path, remote_date)
-        forms.alert("{}\n\nRestart Revit to apply changes.".format(message))
+        forms.alert(
+            "{}\n\nTo apply changes:\n"
+            "- Restart Revit, OR\n"
+            "- Click Reload button on PyRevit tab".format(message)
+        )
     else:
         forms.alert(message, warn_icon=True)
 
