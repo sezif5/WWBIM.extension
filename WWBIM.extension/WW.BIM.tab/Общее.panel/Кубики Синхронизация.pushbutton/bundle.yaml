@@ -1,0 +1,17 @@
+title:
+  ru: "Синхронизация\nКубиков"
+  en_us: "Sync\nKubiks"
+
+tooltip:
+  ru: >-
+    Синхронизирует параметры кубиков (заданий на отверстия) из связи с "Отверстия" в названии.
+    Сопоставляет по параметру "№ кубика" и обновляет: Статус, Согласовано АР/КР/ИОС, Комментарии.
+  en_us: >-
+    Synchronizes opening task parameters from a link with "Otverst" in its name.
+    Matches by "№ кубика" parameter and updates: Status, Approval flags, Comments.
+
+author: Vlad
+help_url: ""
+
+min_revit_version: 2020
+max_revit_version: 2025
