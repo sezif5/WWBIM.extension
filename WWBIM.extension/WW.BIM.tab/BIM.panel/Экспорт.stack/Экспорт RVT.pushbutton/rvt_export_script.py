@@ -490,8 +490,9 @@ def get_workset_filter():
 
 def open_document(mp, worksets_rule):
     """
-    Открывает документ с автоматической обработкой предупреждений.
-    Возвращает кортеж (doc, failure_handler).
+    Открывает документ с автоматической обработкой предупреждений и диалогов.
+    Возвращает кортеж (doc, failure_handler, dialog_suppressor).
+    ВАЖНО: dialog_suppressor остаётся активным! Вызывающий код должен вызвать detach() после работы.
     """
     app = __revit__.Application
     ui  = __revit__
@@ -502,11 +503,11 @@ def open_document(mp, worksets_rule):
     if not workshared:
         # Для не-workshared файлов — используем openbg без detach
         out.print_md(u"  :information_source: Файл не является Workshared")
-        return openbg.open_in_background(app, ui, mp, audit=False, worksets=worksets_rule, detach=False, suppress_warnings=True)
+        return openbg.open_in_background(app, ui, mp, audit=False, worksets=worksets_rule, detach=False, suppress_warnings=True, suppress_dialogs=True)
 
     if DETACH_MODE == "preserve":
         # Используем openbg.open_in_background с detach=True
-        return openbg.open_in_background(app, ui, mp, audit=False, worksets=worksets_rule, detach=True, suppress_warnings=True)
+        return openbg.open_in_background(app, ui, mp, audit=False, worksets=worksets_rule, detach=True, suppress_warnings=True, suppress_dialogs=True)
 
     if DETACH_MODE == "discard":
         # Для discard режима используем openbg с специальной настройкой
@@ -523,17 +524,22 @@ def open_document(mp, worksets_rule):
         except Exception:
             pass
 
+        # Создаем подавитель диалогов
+        dialog_suppressor = openbg.DialogSuppressor()
+        dialog_suppressor.attach(ui)
+
         try:
             doc = app.OpenDocumentFile(mp, opts)
-            return (doc, failure_handler)
+            return (doc, failure_handler, dialog_suppressor)
         finally:
             try:
                 app.FailuresProcessing -= failure_handler.PreprocessFailures
             except Exception:
                 pass
+            # НЕ отключаем dialog_suppressor здесь - он нужен для последующих операций
 
     # DETACH_MODE == "none"
-    return openbg.open_in_background(app, ui, mp, audit=False, worksets=worksets_rule, detach=False, suppress_warnings=True)
+    return openbg.open_in_background(app, ui, mp, audit=False, worksets=worksets_rule, detach=False, suppress_warnings=True, suppress_dialogs=True)
 
 # ---------------- сохранение ----------------
 def save_document(doc, full_path):
@@ -618,7 +624,7 @@ def main():
         workset_rule = ('predicate', get_workset_filter())
 
         try:
-            doc, failure_handler = open_document(mp, workset_rule)
+            doc, failure_handler, dialog_suppressor = open_document(mp, workset_rule)
         except Exception as e:
             out.print_md(":x: Ошибка открытия: `{}`".format(e))
             out.update_progress(i + 1, len(sel_models)); continue
@@ -682,6 +688,26 @@ def main():
             closebg.close_with_policy(doc, do_sync=False, save_if_not_ws=False)
         except Exception:
             pass
+
+        # Отключаем подавитель диалогов и выводим информацию о подавленных диалогах
+        if dialog_suppressor is not None:
+            try:
+                dialog_summary = dialog_suppressor.get_summary()
+                total_dialogs = dialog_summary.get('total_dialogs', 0)
+                if total_dialogs > 0:
+                    out.print_md(u"  :speech_balloon: Автоматически закрыто диалогов: **{}**".format(total_dialogs))
+                    dialogs = dialog_summary.get('dialogs', [])
+                    for idx, d in enumerate(dialogs[:3], 1):
+                        dialog_id = d.get('dialog_id', 'Unknown')
+                        out.print_md(u"    {}. {}".format(idx, dialog_id))
+                    if total_dialogs > 3:
+                        out.print_md(u"    ... и ещё {} диалогов".format(total_dialogs - 3))
+            except Exception:
+                pass
+            try:
+                dialog_suppressor.detach()
+            except Exception:
+                pass
 
         # Обновление путей связей на папку экспорта (после сохранения и закрытия)
         if ok and os.path.exists(dst_file):

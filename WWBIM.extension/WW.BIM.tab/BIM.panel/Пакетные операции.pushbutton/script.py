@@ -484,6 +484,26 @@ def action_add_link(models):
     out.print_md(u"**Готово. Моделей обработано: {}/{}**".format(success_models, len(models)))
 
 
+# ---------- Действия в разработке ----------
+
+def action_create_worksets(models):
+    """Создать рабочие наборы (в разработке)."""
+    forms.alert(
+        u"Функция 'Создать рабочие наборы' находится в разработке.",
+        title=u"В разработке",
+        warn_icon=True
+    )
+
+
+def action_add_shared_params(models):
+    """Добавить общие параметры (в разработке)."""
+    forms.alert(
+        u"Функция 'Добавить общие параметры' находится в разработке.",
+        title=u"В разработке",
+        warn_icon=True
+    )
+
+
 # ---------- Main ----------
 
 def main():
@@ -491,7 +511,9 @@ def main():
     actions = [
         u"Открыть модели",
         u"Загрузить семейство (из открытых)",
-        u"Добавить связь"
+        u"Добавить связь",
+        u"Создать рабочие наборы (в разработке)",
+        u"Добавить общие параметры (в разработке)",
     ]
 
     selected_action = forms.SelectFromList.show(
@@ -559,6 +581,10 @@ def main():
         action_load_family(selected_models)
     elif selected_action == u"Добавить связь":
         action_add_link(selected_models)
+    elif u"Создать рабочие наборы" in selected_action:
+        action_create_worksets(selected_models)
+    elif u"Добавить общие параметры" in selected_action:
+        action_add_shared_params(selected_models)
 
 
 if __name__ == "__main__":

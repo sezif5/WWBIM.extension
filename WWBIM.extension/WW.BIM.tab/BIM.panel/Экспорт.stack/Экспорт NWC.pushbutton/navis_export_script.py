@@ -319,11 +319,12 @@ def main():
             return True
 
         try:
-            doc, failure_handler = openbg.open_in_background(
+            doc, failure_handler, dialog_suppressor = openbg.open_in_background(
                 __revit__.Application, __revit__, mp,
                 audit=False,
                 worksets=('predicate', workset_filter),
-                detach=True  # Отсоединить с сохранением рабочих наборов
+                detach=True,  # Отсоединить с сохранением рабочих наборов
+                suppress_dialogs=True  # Подавлять диалоговые окна (TaskDialog)
             )
         except Exception as e:
             out.print_md(":x: Ошибка открытия: `{}`".format(e))
@@ -361,6 +362,10 @@ def main():
             view, created = find_or_create_navis_view(doc)
         except Exception as e:
             out.print_md(":x: Ошибка подготовки вида 'Navisworks': `{}`".format(e))
+            # Отключаем подавитель диалогов
+            if dialog_suppressor is not None:
+                try: dialog_suppressor.detach()
+                except Exception: pass
             try: closebg.close_with_policy(doc, do_sync=False, save_if_not_ws=False)
             except Exception: pass
             out.update_progress(i + 1, len(sel_models))
@@ -412,6 +417,26 @@ def main():
             closebg.close_with_policy(doc, do_sync=False, save_if_not_ws=False)
         except Exception:
             pass
+
+        # Отключаем подавитель диалогов и выводим информацию о подавленных диалогах
+        if dialog_suppressor is not None:
+            try:
+                dialog_summary = dialog_suppressor.get_summary()
+                total_dialogs = dialog_summary.get('total_dialogs', 0)
+                if total_dialogs > 0:
+                    out.print_md(u":speech_balloon: Автоматически закрыто диалогов: **{}**".format(total_dialogs))
+                    dialogs = dialog_summary.get('dialogs', [])
+                    for idx, d in enumerate(dialogs[:5], 1):
+                        dialog_id = d.get('dialog_id', 'Unknown')
+                        out.print_md(u"  {}. {}".format(idx, dialog_id))
+                    if total_dialogs > 5:
+                        out.print_md(u"  ... и ещё {} диалогов".format(total_dialogs - 5))
+            except Exception:
+                pass
+            try:
+                dialog_suppressor.detach()
+            except Exception:
+                pass
 
         outcome = u":white_check_mark: OK" if ok else (u":x: Ошибка — {}".format(err_text) if err_text else u":x: Ошибка")
         out.print_md(u"- Открытие: **{}**, Экспорт: **{}** → {}".format(open_s, exp_s, outcome))

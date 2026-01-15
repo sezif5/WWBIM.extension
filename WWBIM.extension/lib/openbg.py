@@ -13,6 +13,7 @@ from Autodesk.Revit.DB import (
     BuiltInCategory, Category, ElementId, View3D, ViewFamilyType, ViewFamily, Transaction, FilteredElementCollector,
     IFailuresPreprocessor, FailureProcessingResult, FailureSeverity
 )
+from Autodesk.Revit.UI.Events import DialogBoxShowingEventArgs
 from System.Collections.Generic import List
 from System import Enum
 
@@ -65,6 +66,104 @@ class SuppressWarningsPreprocessor(IFailuresPreprocessor):
             'total_warnings': len(self.warnings),
             'total_errors': len(self.errors)
         }
+
+
+# ---------------- Dialog Suppressor ----------------
+
+class DialogSuppressor(object):
+    """
+    Подавляет диалоговые окна Revit (TaskDialog), которые блокируют выполнение скрипта.
+
+    Используется для автоматического закрытия предупреждений типа:
+    - "Марка Помещение вне элемента Помещение"
+    - "Не найдена геометрия для экспорта"
+    - "Для экземпляра требуется просмотр координаций"
+    - "Один или несколько опорных элементов размеров сейчас некорректны"
+    и других диалогов, появляющихся при открытии/экспорте.
+    """
+
+    def __init__(self):
+        self.suppressed_dialogs = []
+        self._uiapp = None
+
+    def _on_dialog_showing(self, sender, args):
+        """Обработчик события DialogBoxShowing - автоматически закрывает диалоги."""
+        try:
+            # Получаем информацию о диалоге
+            dialog_id = None
+            try:
+                dialog_id = args.DialogId
+            except Exception:
+                pass
+
+            # Сохраняем информацию для отчёта
+            dialog_info = {
+                'dialog_id': dialog_id,
+                'type': type(args).__name__
+            }
+
+            # Пытаемся получить дополнительную информацию для TaskDialog
+            try:
+                if hasattr(args, 'Message'):
+                    dialog_info['message'] = args.Message
+            except Exception:
+                pass
+
+            self.suppressed_dialogs.append(dialog_info)
+
+            # Закрываем диалог - пробуем разные подходы
+            # 1. Для TaskDialogShowingEventArgs - используем OverrideResult
+            try:
+                # TaskDialogResult.Close = 8, Cancel = 2, Ok = 1
+                # Пробуем закрыть через стандартные результаты
+                args.OverrideResult(1)  # OK / Close
+                return
+            except Exception:
+                pass
+
+            # 2. Для MessageBoxShowingEventArgs - используем OverrideResult с 1 (OK)
+            try:
+                if hasattr(args, 'OverrideResult'):
+                    args.OverrideResult(1)
+                    return
+            except Exception:
+                pass
+
+        except Exception:
+            pass
+
+    def attach(self, uiapp):
+        """Подключить обработчик к UIApplication."""
+        self._uiapp = uiapp
+        if uiapp is not None:
+            try:
+                uiapp.DialogBoxShowing += self._on_dialog_showing
+            except Exception:
+                pass
+
+    def detach(self):
+        """Отключить обработчик от UIApplication."""
+        if self._uiapp is not None:
+            try:
+                self._uiapp.DialogBoxShowing -= self._on_dialog_showing
+            except Exception:
+                pass
+            self._uiapp = None
+
+    def get_summary(self):
+        """Возвращает сводку о подавленных диалогах."""
+        return {
+            'dialogs': list(self.suppressed_dialogs),
+            'total_dialogs': len(self.suppressed_dialogs)
+        }
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.detach()
+        return False
+
 
 # ---------------- helpers ----------------
 
@@ -296,7 +395,7 @@ def _hide_categories_by_names(doc, view, names):
 
 # ----------- public API -----------
 
-def open_in_background(app_or_uiapp, maybe_uiapp, model_path_or_str, audit=False, worksets='lastviewed', detach=False, suppress_warnings=True):
+def open_in_background(app_or_uiapp, maybe_uiapp, model_path_or_str, audit=False, worksets='lastviewed', detach=False, suppress_warnings=True, suppress_dialogs=True):
     """
     Открыть документ в фоне.
 
@@ -304,10 +403,16 @@ def open_in_background(app_or_uiapp, maybe_uiapp, model_path_or_str, audit=False
         detach: если True — открыть с опцией "Отсоединить с сохранением рабочих наборов"
                 (DetachAndPreserveWorksets)
         suppress_warnings: если True — автоматически подавлять предупреждения и ошибки при открытии
+                          (через IFailuresPreprocessor)
+        suppress_dialogs: если True — автоматически закрывать диалоговые окна Revit
+                         (через DialogBoxShowing event)
 
     Returns:
-        tuple: (doc, failure_handler) - документ и обработчик предупреждений (или None, если suppress_warnings=False)
-               Используйте failure_handler.get_summary() для получения информации об обработанных ошибках/предупреждениях
+        tuple: (doc, failure_handler, dialog_suppressor) - документ, обработчик предупреждений и подавитель диалогов
+               Используйте failure_handler.get_summary() для информации об обработанных ошибках/предупреждениях
+               Используйте dialog_suppressor.get_summary() для информации о подавленных диалогах
+               ВАЖНО: dialog_suppressor остаётся активным после открытия! Отключите его вызовом detach()
+                      когда закончите работу с документом, или используйте suppress_dialogs_context()
     """
     app, uiapp = _coerce_app_uiapp(app_or_uiapp, maybe_uiapp)
     mp = _to_model_path(model_path_or_str)
@@ -327,7 +432,7 @@ def open_in_background(app_or_uiapp, maybe_uiapp, model_path_or_str, audit=False
         except Exception:
             pass
 
-    # Обработчик предупреждений
+    # Обработчик предупреждений транзакций (Failures API)
     failure_handler = None
     if suppress_warnings:
         failure_handler = SuppressWarningsPreprocessor()
@@ -336,10 +441,16 @@ def open_in_background(app_or_uiapp, maybe_uiapp, model_path_or_str, audit=False
         except Exception:
             pass
 
+    # Подавитель диалоговых окон (TaskDialog и др.)
+    dialog_suppressor = None
+    if suppress_dialogs and uiapp is not None:
+        dialog_suppressor = DialogSuppressor()
+        dialog_suppressor.attach(uiapp)
+
     try:
         try:
             doc = app.OpenDocumentFile(mp, opts)
-            return (doc, failure_handler)
+            return (doc, failure_handler, dialog_suppressor)
         except Exception as ex1:
             msg = u"{}".format(ex1)
             need_retry_lv = False
@@ -356,7 +467,7 @@ def open_in_background(app_or_uiapp, maybe_uiapp, model_path_or_str, audit=False
                     try: opts2.SetOpenWorksetsConfiguration(cfg2)
                     except Exception: pass
                     doc = app.OpenDocumentFile(mp, opts2)
-                    return (doc, failure_handler)
+                    return (doc, failure_handler, dialog_suppressor)
                 except Exception:
                     cfg3 = _cfg_from_optname('OpenAllWorksets')
                     opts3 = OpenOptions();
@@ -365,15 +476,18 @@ def open_in_background(app_or_uiapp, maybe_uiapp, model_path_or_str, audit=False
                     try: opts3.SetOpenWorksetsConfiguration(cfg3)
                     except Exception: pass
                     doc = app.OpenDocumentFile(mp, opts3)
-                    return (doc, failure_handler)
+                    return (doc, failure_handler, dialog_suppressor)
             raise
     finally:
-        # Отписываемся от события, чтобы не оставлять обработчик в памяти
+        # Отписываемся от события Failures (всегда)
         if failure_handler is not None:
             try:
                 app.FailuresProcessing -= failure_handler.PreprocessFailures
             except Exception:
                 pass
+        # НЕ отключаем dialog_suppressor здесь - он нужен для подавления диалогов
+        # при последующих операциях (создание вида, экспорт и т.д.)
+        # Вызывающий код должен вызвать dialog_suppressor.detach() когда закончит
 
 def prepare_navisworks_view(doc, view):
     """Скрыть служебные/аннотационные категории. Отсутствующие — пропускаются. Возвращает число скрытых."""
