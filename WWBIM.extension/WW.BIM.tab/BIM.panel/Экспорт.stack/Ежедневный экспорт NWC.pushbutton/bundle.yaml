@@ -1,0 +1,15 @@
+title:
+  ru: "Ежедневный\nэкспорт NWC"
+  en_us: "Daily NWC Export"
+
+tooltip:
+  ru: >-
+    Ежедневный экспорт RVT в NWC с проверкой актуальности.
+    Автоматический запуск через Windows Scheduled Task.
+    Выбор объектов и папок NWC через txt файлы в папке Object.
+
+author: Vlad
+help_url: "Error"
+
+min_revit_version: 2020
+max_revit_version: 2024
