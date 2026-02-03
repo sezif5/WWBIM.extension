@@ -38,11 +38,13 @@ LOG_RETENTION_DAYS = 7
 SERVICE_INTERVAL_SECONDS = 300
 SERVICE_PERSISTENT_KEY = "daily_nwc_service"
 EXPORT_ENABLED = True
+EXPORT_TIME_CONFIG = "Export_Time.txt"
+SERVICE_CHECK_INTERVAL_MS = 60000  # 1 minute check interval
+EXPORT_TIME_WINDOW_SECONDS = 300  # 5 minute window for export trigger
+SERVICE_DIAG_MODE = True  # True: only log queue steps, no export
 
 out = script.get_output()
-out.close_others(all_open_outputs=True)
-
-_global_service_manager = None
+# Note: Removed out.close_others() - it conflicts with service logs
 
 
 def _norm(p):
@@ -121,6 +123,29 @@ def read_object_folder_path(script_root):
 def save_object_folder_path(object_folder_path, script_root):
     config_path = os.path.join(script_root, OBJECT_FOLDER_CONFIG)
     return write_txt_file(config_path, object_folder_path)
+
+
+def read_export_time(object_folder_path):
+    """Read export time from config file, returns default '00:00' if not set."""
+    config_path = os.path.join(object_folder_path, EXPORT_TIME_CONFIG)
+    time_str = read_txt_file(config_path)
+    if time_str:
+        # Validate format HH:MM
+        try:
+            parts = time_str.split(":")
+            if len(parts) == 2:
+                h, m = int(parts[0]), int(parts[1])
+                if 0 <= h <= 23 and 0 <= m <= 59:
+                    return time_str
+        except ValueError:
+            pass
+    return "00:00"
+
+
+def save_export_time(export_time, object_folder_path):
+    """Save export time to config file."""
+    config_path = os.path.join(object_folder_path, EXPORT_TIME_CONFIG)
+    return write_txt_file(config_path, export_time)
 
 
 def read_object_config(object_name, object_folder_path):
@@ -413,6 +438,53 @@ def get_file_path_type(filepath):
 
 def check_need_export(rvt_path, nwc_folder, object_name, app=None, revit=None):
     path_type = get_file_path_type(rvt_path)
+
+    if path_type == "revit_server":
+        rvt_filename = os.path.splitext(os.path.basename(rvt_path))[0]
+
+        nwc_path1 = os.path.join(nwc_folder, rvt_filename + ".nwc")
+        nwc_date1 = get_file_modification_date(nwc_path1)
+
+        nwc_path2 = None
+        nwc_date2 = None
+        match = re.search(r"_R(\d+)$", rvt_filename)
+        if match:
+            suffix = match.group(0)
+            version_num = match.group(1)
+            new_version_num = str(int(version_num) + 1)
+            new_suffix = "_N" + str(new_version_num)
+            nwc_filename2 = rvt_filename.replace(suffix, new_suffix)
+            nwc_path2 = os.path.join(nwc_folder, nwc_filename2 + ".nwc")
+            nwc_date2 = get_file_modification_date(nwc_path2)
+
+        nwc_date = None
+        nwc_used_path = None
+
+        if nwc_date1 and nwc_date2:
+            nwc_date = max(nwc_date1, nwc_date2)
+            nwc_used_path = nwc_path1 if nwc_date1 > nwc_date2 else nwc_path2
+        elif nwc_date1:
+            nwc_date = nwc_date1
+            nwc_used_path = nwc_path1
+        elif nwc_date2:
+            nwc_date = nwc_date2
+            nwc_used_path = nwc_path2
+
+        return {
+            "need_export": True,
+            "reason": "Revit Server (всегда экспортировать)",
+            "rvt_date": None,
+            "nwc_date": nwc_date,
+            "nwc_exists": nwc_date is not None,
+            "nwc_used_path": nwc_used_path,
+            "rvt_filename": rvt_filename,
+            "nwc_path1": nwc_path1,
+            "nwc_date1": nwc_date1,
+            "nwc_path2": nwc_path2,
+            "nwc_date2": nwc_date2,
+            "path_type": path_type,
+        }
+
     rvt_date = get_file_modification_date(rvt_path)
 
     rvt_filename = os.path.splitext(os.path.basename(rvt_path))[0]
@@ -534,6 +606,8 @@ def log_message(log_path, message):
         with codecs.open(log_path, "a", encoding="utf-8") as f:
             timestamp = datetime.datetime.now().strftime("[%H:%M:%S]")
             f.write("{} {}\n".format(timestamp, message))
+            f.flush()  # Force write to disk
+            os.fsync(f.fileno())  # Force OS to flush
     except Exception:
         pass
 
@@ -591,27 +665,27 @@ class NWCExportHandler(IExternalEventHandler):
         self.export_result = None
         self.export_event = threading.Event()
 
-    def set_export_request(self, rvt_path, nwc_folder, app, revit):
+    def set_export_request(self, object_name, rvt_path, nwc_folder, mode="real"):
         self.export_request = {
+            "object_name": object_name,
             "rvt_path": rvt_path,
             "nwc_folder": nwc_folder,
-            "app": app,
-            "revit": revit,
+            "mode": mode,
         }
         self.export_result = None
         self.export_event.clear()
 
-    def Execute(self, app):
+    def Execute(self, uiapp):
         if self.export_request is None:
             return
 
+        object_name = self.export_request["object_name"]
         rvt_path = self.export_request["rvt_path"]
         nwc_folder = self.export_request["nwc_folder"]
-        revit_app = self.export_request["app"]
-        revit = self.export_request["revit"]
+        mode = self.export_request["mode"]
 
         try:
-            result = export_rvt_to_nwc(rvt_path, nwc_folder, revit_app, revit)
+            result = export_rvt_to_nwc(rvt_path, nwc_folder, uiapp.Application, uiapp)
             self.export_result = result
         except Exception as e:
             self.export_result = {
@@ -632,8 +706,10 @@ class NWCExportTask:
         self.handler = NWCExportHandler()
         self.external_event = ExternalEvent.Create(self.handler)
 
-    def export(self, rvt_path, nwc_folder, app, revit, timeout=600, log_path=None):
-        self.handler.set_export_request(rvt_path, nwc_folder, app, revit)
+    def export(
+        self, object_name, rvt_path, nwc_folder, mode="real", timeout=600, log_path=None
+    ):
+        self.handler.set_export_request(object_name, rvt_path, nwc_folder, mode)
         request = self.external_event.Raise()
 
         if request == ExternalEventRequest.Accepted:
@@ -659,7 +735,192 @@ class NWCExportTask:
             }
 
 
+class NWCExportQueueHandler(IExternalEventHandler):
+    def __init__(self):
+        self.task_queue = []
+        self.current_index = 0
+        self.is_exporting = False
+        self.log_path = None
+        self.object_folder_path = None
+        self.app = None
+        self.revit = None
+        self.service_manager = None
+        self.export_enabled = False
+        self.queue_event = None
+
+    def set_queue(
+        self,
+        tasks,
+        log_path,
+        object_folder_path,
+        app,
+        revit,
+        service_manager,
+        export_enabled=False,
+    ):
+        self.task_queue = tasks
+        self.current_index = 0
+        self.is_exporting = True
+        self.log_path = log_path
+        self.object_folder_path = object_folder_path
+        self.app = app
+        self.revit = revit
+        self.service_manager = service_manager
+        self.export_enabled = export_enabled
+
+    def set_queue_event(self, event):
+        self.queue_event = event
+
+    def Execute(self, uiapp):
+        if not self.is_exporting or self.current_index >= len(self.task_queue):
+            self._cleanup()
+            return
+
+        log_message(
+            self.log_path,
+            "[Queue] Execute entered. Index: {} of {}".format(
+                self.current_index + 1, len(self.task_queue)
+            ),
+        )
+
+        task = self.task_queue[self.current_index]
+        object_name = task["object_name"]
+        rvt_path = task["rvt_path"]
+        nwc_folder = task["nwc_folder"]
+
+        log_message(
+            self.log_path,
+            "[Queue] Processing task {}/{}: {} - {}".format(
+                self.current_index + 1,
+                len(self.task_queue),
+                object_name,
+                os.path.basename(rvt_path),
+            ),
+        )
+
+        if SERVICE_DIAG_MODE:
+            log_message(
+                self.log_path,
+                "[Queue] Diagnostic mode - skipping export logic",
+            )
+            self._move_to_next_task()
+            return
+
+        try:
+            path_type = get_file_path_type(rvt_path)
+            path_exists = False
+
+            if path_type == "revit_server":
+                path_exists = get_file_modification_date(rvt_path) is not None
+            else:
+                path_exists = os.path.exists(rvt_path)
+
+            if not path_exists:
+                error = "RVT not found: {}".format(rvt_path)
+                log_export_error(self.log_path, object_name, error)
+                self._move_to_next_task()
+                return
+
+            check_result = check_need_export(
+                rvt_path,
+                nwc_folder,
+                object_name,
+                self.app,
+                self.revit,
+            )
+
+            log_message(
+                self.log_path, "[Queue] Check result: {}".format(check_result["reason"])
+            )
+
+            if not check_result["need_export"]:
+                log_export_skipped(
+                    self.log_path,
+                    object_name,
+                    check_result["reason"],
+                    check_result.get("rvt_date"),
+                    check_result.get("nwc_date"),
+                    check_result.get("nwc_used_path"),
+                )
+                self._move_to_next_task()
+                return
+
+            if self.export_enabled:
+                log_message(
+                    self.log_path,
+                    "[Queue] Starting export for {}...".format(object_name),
+                )
+
+                result = export_rvt_to_nwc(
+                    rvt_path,
+                    nwc_folder,
+                    uiapp.Application,
+                    uiapp,
+                )
+
+                if result and result.get("success"):
+                    file_size = result.get("file_size_mb", 0)
+                    elapsed = result.get("time_export", "0s")
+                    log_export_success(
+                        self.log_path,
+                        object_name,
+                        elapsed,
+                        file_size,
+                    )
+                else:
+                    error = (
+                        result.get("error", "Unknown error")
+                        if result
+                        else "Unknown error"
+                    )
+                    log_export_error(self.log_path, object_name, error)
+            else:
+                log_message(
+                    self.log_path,
+                    "[Queue] Export disabled (dry-run mode) for {}".format(object_name),
+                )
+
+        except Exception as e:
+            error = "Export error for {}: {}".format(object_name, str(e))
+            log_export_error(self.log_path, object_name, error)
+
+        self._move_to_next_task()
+
+    def _move_to_next_task(self):
+        self.current_index += 1
+
+        if self.current_index < len(self.task_queue):
+            if self.queue_event:
+                self.queue_event.Raise()
+        else:
+            self._cleanup()
+
+    def _cleanup(self):
+        log_message(
+            self.log_path,
+            "[Queue] Queue completed. Total tasks: {}".format(len(self.task_queue)),
+        )
+        self.is_exporting = False
+        self.task_queue = []
+        self.current_index = 0
+
+        if self.service_manager:
+            self.service_manager._on_queue_finished()
+
+        remove_lock_file(self.object_folder_path)
+
+    def GetName(self):
+        return "NWC Export Queue Handler"
+
+
 class ServiceManager:
+    """
+    Service manager for scheduled NWC exports.
+
+    Uses WPF DispatcherTimer instead of threading to ensure all Revit API calls
+    (including ExternalEvent) happen on the UI thread.
+    """
+
     def __init__(
         self,
         object_folder_path,
@@ -676,128 +937,152 @@ class ServiceManager:
         self.app = app
         self.revit = revit
         self.running = False
-        self.thread = None
-        self.export_task = NWCExportTask()
-        self.export_lock = threading.Lock()
+        self.timer = None
+        self.queue_handler = NWCExportQueueHandler()
+        self.queue_event = ExternalEvent.Create(self.queue_handler)
+        self.queue_handler.set_queue_event(self.queue_event)
         self.last_error = None
         self.last_error_time = None
         self.export_enabled = export_enabled
         self.export_time = export_time
         self.last_export_date = None
-        self.first_run = True
+        self._is_exporting = False
 
     def start(self):
+        """Start the service using DispatcherTimer (UI thread safe)."""
         if self.running:
             return False
 
-        self.running = True
-        self.thread = threading.Thread(target=self._service_loop)
-        self.thread.daemon = True
-        self.thread.start()
-        return True
+        try:
+            from System.Windows.Threading import DispatcherTimer
+            from System import TimeSpan, EventHandler
+
+            self.running = True
+            self.timer = DispatcherTimer()
+            self.timer.Interval = TimeSpan.FromMilliseconds(SERVICE_CHECK_INTERVAL_MS)
+            self.timer.Tick += EventHandler(self._on_timer_tick)
+            self.timer.Start()
+
+            log_message(
+                self.log_path,
+                "[Service] Started. Check interval: {}ms, Export time: {}".format(
+                    SERVICE_CHECK_INTERVAL_MS, self.export_time
+                ),
+            )
+            log_message(
+                self.log_path,
+                "[Service] Timer created and started",
+            )
+            return True
+        except Exception as e:
+            self.last_error = str(e)
+            self.last_error_time = datetime.datetime.now()
+            log_message(self.log_path, "[Service] Failed to start: {}".format(e))
+            return False
 
     def stop(self):
+        """Stop the service."""
         self.running = False
-        if self.thread:
-            self.thread.join(timeout=5)
-
-    def _service_loop(self):
-        while self.running:
+        if self.timer:
             try:
-                if self._should_export_now():
-                    log_message(
-                        self.log_path,
-                        "[Service] Checking time: {} (scheduled: {})".format(
-                            datetime.datetime.now().strftime("%H:%M"), self.export_time
-                        ),
-                    )
+                self.timer.Stop()
+                self.timer = None
+            except Exception:
+                pass
+        log_message(self.log_path, "[Service] Stopped.")
+
+    def _on_timer_tick(self, sender, args):
+        """
+        Timer tick handler - called on UI thread.
+        Safe to use ExternalEvent here.
+        """
+        if not self.running or self._is_exporting:
+            return
+
+        log_message(
+            self.log_path,
+            "[Service] Timer tick at {}".format(
+                datetime.datetime.now().strftime("%H:%M:%S")
+            ),
+        )
+
+        try:
+            if self._should_export_now():
+                log_message(
+                    self.log_path,
+                    "[Service] Time to export: {} (scheduled: {})".format(
+                        datetime.datetime.now().strftime("%H:%M:%S"), self.export_time
+                    ),
+                )
+                self._is_exporting = True
+                try:
                     self._check_and_export()
                     self.last_export_date = datetime.datetime.now().strftime("%Y-%m-%d")
-            except Exception as e:
-                self.last_error = str(e)
-                self.last_error_time = datetime.datetime.now()
-                log_message(self.log_path, "[Service Error] {}".format(e))
-
-            sleep_time = self._get_sleep_time()
-            log_message(
-                self.log_path, "[Service] Next check in {} seconds".format(sleep_time)
-            )
-            time.sleep(sleep_time)
+                finally:
+                    self._is_exporting = False
+            else:
+                log_message(
+                    self.log_path,
+                    "[Service] Not time to export yet",
+                )
+        except Exception as e:
+            self.last_error = str(e)
+            self.last_error_time = datetime.datetime.now()
+            log_message(self.log_path, "[Service Error] {}".format(e))
 
     def _should_export_now(self):
         """
-        Проверяет, нужно ли экспортировать прямо сейчас.
+        Check if export should run now.
 
-        Логика:
-        - Если это первый запуск после start():
-          - Если текущее время < запланированного → нет
-          - Если текущее время >= запланированного:
-            - Если сегодня уже экспортировали → нет
-            - Если сегодня ещё не экспортировали → да
-        - При последующих проверках:
-          - Проверяем точное совпадение времени
+        Robust daily logic:
+        - If now >= scheduled time AND not already exported today → trigger
+        - This ensures export happens even if Revit was busy/frozen
+          or computer was asleep past the scheduled time.
         """
         now = datetime.datetime.now()
-        current_time = now.strftime("%H:%M")
         current_date = now.strftime("%Y-%m-%d")
 
-        if self.first_run:
-            self.first_run = False
-
-            if current_time < self.export_time:
-                log_message(
-                    self.log_path,
-                    "[Service] First run: waiting for {} (current: {})".format(
-                        self.export_time, current_time
-                    ),
-                )
-                return False
-
-            if self.last_export_date == current_date:
-                log_message(
-                    self.log_path, "[Service] First run: already exported today"
-                )
-                return False
-
-            log_message(self.log_path, "[Service] First run: exporting now")
-            return True
-
-        if current_time != self.export_time:
-            return False
-
+        # Already exported today?
         if self.last_export_date == current_date:
             return False
 
-        return True
-
-    def _get_sleep_time(self):
-        """
-        Вычисляет время до следующей проверки.
-
-        Логика:
-        - Если это первый запуск и текущее время < запланированного:
-          - Ждём до запланированного времени сегодня
-        - Иначе:
-          - Ждём до запланированного времени завтра
-        """
-        now = datetime.datetime.now()
-        current_time = now.strftime("%H:%M")
-        current_date = now.strftime("%Y-%m-%d")
-
-        if self.first_run and current_time < self.export_time:
-            export_today = datetime.datetime.strptime(
-                current_date + " " + self.export_time, "%Y-%m-%d %H:%M"
+        # Parse scheduled time
+        try:
+            hour, minute = map(int, self.export_time.split(":"))
+            scheduled = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        except ValueError:
+            log_message(
+                self.log_path,
+                "[Service] Invalid export_time format: {}".format(self.export_time),
             )
-            sleep_seconds = int((export_today - now).total_seconds())
-            return max(sleep_seconds, 60)
+            return False
 
-        export_tomorrow = datetime.datetime.strptime(
-            current_date + " " + self.export_time, "%Y-%m-%d %H:%M"
-        ) + datetime.timedelta(days=1)
-        sleep_seconds = int((export_tomorrow - now).total_seconds())
-        return max(sleep_seconds, 60)
+        # Check if current time >= scheduled time
+        if now >= scheduled:
+            diff_seconds = int((now - scheduled).total_seconds())
+            log_message(
+                self.log_path,
+                "[Service] Time to export: {} seconds after scheduled time {}".format(
+                    diff_seconds, self.export_time
+                ),
+            )
+            return True
+
+        return False
 
     def _check_and_export(self):
+        """Check each object and export if needed using queue handler."""
+        # Use lock file to prevent concurrent runs
+        if check_lock_file(self.object_folder_path):
+            log_message(
+                self.log_path,
+                "[Service] Skipping - another export is in progress (lock file exists)",
+            )
+            return
+
+        log_message(self.log_path, "[Service] Building export queue")
+        # Build task queue
+        tasks = []
         for object_name in self.export_list:
             if not self.running:
                 break
@@ -814,172 +1099,84 @@ class ServiceManager:
                 log_export_error(self.log_path, object_name, error)
                 continue
 
-            self._export_single(object_name, config)
+            for rvt_path in config["rvt_paths"]:
+                tasks.append(
+                    {
+                        "object_name": object_name,
+                        "rvt_path": rvt_path,
+                        "nwc_folder": config["nwc_folder"],
+                    }
+                )
 
-    def _export_single(self, object_name, config):
-        with self.export_lock:
-            log_export_start(
+        if tasks:
+            log_message(
                 self.log_path,
-                object_name,
-                "Multiple RVT files ({} files)".format(len(config["rvt_paths"])),
+                "[Service] Starting export queue with {} tasks".format(len(tasks)),
             )
-
-            for rvt_idx, rvt_path in enumerate(config["rvt_paths"], 1):
-                path_type = get_file_path_type(rvt_path)
-                path_exists = False
-
-                if path_type == "revit_server":
-                    path_exists = get_file_modification_date(rvt_path) is not None
-                    log_message(
-                        self.log_path,
-                        "  [{}] Checking RVT (Revit Server): {}".format(
-                            rvt_idx, rvt_path
-                        ),
-                    )
-                else:
-                    path_exists = os.path.exists(rvt_path)
-                    log_message(
-                        self.log_path,
-                        "  [{}] Checking RVT (Local): {}".format(
-                            rvt_idx, os.path.basename(rvt_path)
-                        ),
-                    )
-
-                if path_exists:
-                    check_result = check_need_export(
-                        rvt_path,
-                        config["nwc_folder"],
-                        object_name,
-                        self.app,
-                        self.revit,
-                    )
-
-                    log_message(
-                        self.log_path,
-                        "  [{}] Check result: {}".format(
-                            rvt_idx, check_result["reason"]
-                        ),
-                    )
-
-                    if check_result.get("rvt_date"):
-                        rvt_date = check_result.get("rvt_date")
-                        log_message(
-                            self.log_path,
-                            "  [{}] RVT date: {}".format(
-                                rvt_idx, rvt_date.strftime("%Y-%m-%d %H:%M:%S")
-                            ),
-                        )
-                    else:
-                        log_message(
-                            self.log_path, "  [{}] RVT date: NOT FOUND".format(rvt_idx)
-                        )
-
-                    nwc_used_path = check_result.get("nwc_used_path")
-                    nwc_date = check_result.get("nwc_date")
-                    if nwc_used_path and nwc_date:
-                        log_message(
-                            self.log_path,
-                            "  [{}] NWC used: {} ({})".format(
-                                rvt_idx,
-                                nwc_date.strftime("%Y-%m-%d %H:%M:%S"),
-                                nwc_used_path,
-                            ),
-                        )
-                    elif nwc_used_path:
-                        log_message(
-                            self.log_path,
-                            "  [{}] NWC used: {} (NOT FOUND)".format(
-                                rvt_idx, nwc_used_path
-                            ),
-                        )
-                    else:
-                        log_message(
-                            self.log_path,
-                            "  [{}] NWC used: NONE (no NWC files found)".format(
-                                rvt_idx
-                            ),
-                        )
-
-                    if not check_result["need_export"]:
-                        log_export_skipped(
-                            self.log_path,
-                            "{}_{}".format(object_name, rvt_idx),
-                            check_result["reason"],
-                            check_result.get("rvt_date"),
-                            check_result.get("nwc_date"),
-                            check_result.get("nwc_used_path"),
-                        )
-                        continue
-
-                    if self.export_enabled:
-                        log_message(
-                            self.log_path,
-                            "  [{}] Starting export via ExternalEvent...".format(
-                                rvt_idx
-                            ),
-                        )
-
-                        result = self.export_task.export(
-                            rvt_path,
-                            config["nwc_folder"],
-                            self.app,
-                            self.revit,
-                            log_path=self.log_path,
-                        )
-
-                        log_message(
-                            self.log_path,
-                            "  [{}] Export completed, checking result...".format(
-                                rvt_idx
-                            ),
-                        )
-
-                        if result and result.get("success"):
-                            file_size = result.get("file_size_mb", 0)
-                            elapsed = result.get("time_export", "0s")
-                            log_export_success(
-                                self.log_path,
-                                "{}_{}".format(object_name, rvt_idx),
-                                elapsed,
-                                file_size,
-                            )
-                        else:
-                            error = (
-                                result.get("error", "Unknown error")
-                                if result
-                                else "Unknown error"
-                            )
-                            log_export_error(
-                                self.log_path,
-                                "{}_{}".format(object_name, rvt_idx),
-                                error,
-                            )
-                    else:
-                        log_message(
-                            self.log_path,
-                            "  [{}] Export disabled (dry-run mode)".format(rvt_idx),
-                        )
+            create_lock_file(self.object_folder_path)
+            self.queue_handler.set_queue(
+                tasks,
+                self.log_path,
+                self.object_folder_path,
+                self.app,
+                self.revit,
+                self,
+                self.export_enabled,
+            )
+            raise_result = self.queue_event.Raise()
+            log_message(
+                self.log_path,
+                "[Service] ExternalEvent.Raise returned: {}".format(raise_result),
+            )
+        else:
+            log_message(self.log_path, "[Service] No tasks to export")
 
     def get_status(self):
+        """Get current service status."""
         status = {
             "running": self.running,
             "last_error": self.last_error,
             "last_error_time": self.last_error_time,
+            "last_export_date": self.last_export_date,
+            "export_time": self.export_time,
+            "is_exporting": self._is_exporting,
         }
         return status
 
+    def _on_queue_finished(self):
+        """Callback when export queue finishes."""
+        log_message(self.log_path, "[Service] Export queue finished")
+        self.last_export_date = datetime.datetime.now().strftime("%Y-%m-%d")
+        self._is_exporting = False
+
 
 def get_service_manager():
-    """Получает менеджер службы из глобальной переменной."""
-    global _global_service_manager
-    return _global_service_manager
+    """
+    Получает менеджер службы из AppDomain.
+
+    Использует System.AppDomain.CurrentDomain для хранения ссылки на ServiceManager.
+    Это работает независимо от версии pyRevit и держит объект в памяти
+    пока работает процесс Revit.
+    """
+    try:
+        import System
+
+        return System.AppDomain.CurrentDomain.GetData(SERVICE_PERSISTENT_KEY)
+    except Exception:
+        return None
 
 
 def set_service_manager(manager):
-    """Сохраняет менеджер службы в глобальную переменную."""
-    global _global_service_manager
+    """
+    Сохраняет менеджер службы в AppDomain.
+
+    AppDomain.CurrentDomain живёт пока работает Revit, что гарантирует
+    что ServiceManager и его DispatcherTimer останутся в памяти.
+    """
     try:
-        _global_service_manager = manager
+        import System
+
+        System.AppDomain.CurrentDomain.SetData(SERVICE_PERSISTENT_KEY, manager)
         return True
     except Exception as e:
         out.print_md(":x: Failed to save service manager: {}".format(e))
@@ -987,10 +1184,11 @@ def set_service_manager(manager):
 
 
 def clear_service_manager():
-    """Удаляет менеджер службы из глобальной переменной."""
-    global _global_service_manager
+    """Очищает менеджер службы из AppDomain."""
     try:
-        _global_service_manager = None
+        import System
+
+        System.AppDomain.CurrentDomain.SetData(SERVICE_PERSISTENT_KEY, None)
         return True
     except Exception:
         return False
@@ -1000,8 +1198,6 @@ def export_single_object(
     object_name,
     rvt_path,
     nwc_folder,
-    app,
-    revit,
     log_path,
     auto_mode=False,
     export_task=None,
@@ -1009,7 +1205,7 @@ def export_single_object(
 ):
     log_export_start(log_path, object_name, rvt_path)
 
-    check_result = check_need_export(rvt_path, nwc_folder, object_name, app, revit)
+    check_result = check_need_export(rvt_path, nwc_folder, object_name)
 
     path_type = check_result.get("path_type", "unknown")
     log_message(log_path, "  - Path type: {}".format(path_type.upper()))
@@ -1060,10 +1256,21 @@ def export_single_object(
     if export_enabled:
         if export_task:
             export_result = export_task.export(
-                rvt_path, nwc_folder, app, revit, log_path=log_path
+                object_name,
+                rvt_path,
+                nwc_folder,
+                "real" if export_enabled else "dry",
+                log_path=log_path,
             )
         else:
-            export_result = export_rvt_to_nwc(rvt_path, nwc_folder, app, revit)
+            temp_task = NWCExportTask()
+            export_result = temp_task.export(
+                object_name,
+                rvt_path,
+                nwc_folder,
+                "real" if export_enabled else "dry",
+                log_path=log_path,
+            )
 
         if export_result and export_result.get("success"):
             file_size = export_result.get("file_size_mb", 0)
@@ -1099,7 +1306,7 @@ def export_single_object(
 
 
 def export_all_objects(
-    object_folder_path, export_list, app, revit, auto_mode=False, export_enabled=False
+    object_folder_path, export_list, auto_mode=False, export_enabled=False
 ):
     log_path = init_logger(object_folder_path)
     if not log_path:
@@ -1172,8 +1379,6 @@ def export_all_objects(
                     object_name + "_" + str(rvt_idx),
                     rvt_path,
                     config["nwc_folder"],
-                    app,
-                    revit,
                     log_path,
                     auto_mode,
                     export_task=None,
@@ -1541,6 +1746,7 @@ def main():
     out.print_md("[DEBUG] Auto mode: {}".format(auto_mode))
 
     export_time = "00:00"
+    # Note: export_time will be loaded from config once object_folder_path is known
     for arg in sys.argv:
         if arg.startswith("--time="):
             export_time = arg.split("=")[1]
@@ -1592,8 +1798,6 @@ def main():
             result = export_all_objects(
                 object_folder_path,
                 export_list,
-                app,
-                revit,
                 auto_mode=True,
                 export_enabled=EXPORT_ENABLED,
             )
@@ -1636,6 +1840,13 @@ def main():
         else:
             script.exit()
 
+        # Load export_time from config if not overridden by command line
+        if export_time == "00:00":
+            export_time = read_export_time(object_folder_path)
+            out.print_md(
+                "[INFO] Export time loaded from config: {}".format(export_time)
+            )
+
         while True:
             service_manager = get_service_manager()
             service_running = service_manager is not None and service_manager.running
@@ -1658,8 +1869,6 @@ def main():
                     summary = export_all_objects(
                         object_folder_path,
                         export_list,
-                        app,
-                        revit,
                         auto_mode=False,
                         export_enabled=EXPORT_ENABLED,
                     )
@@ -1703,6 +1912,17 @@ def main():
                             )
                         )
                         out.print_md("Log: `{}`".format(log_path))
+                        out.print_md("___")
+                        out.print_md(
+                            ":information_source: Service is now running in background."
+                        )
+                        out.print_md(
+                            ":information_source: To check status, run this script again."
+                        )
+                        out.print_md(
+                            ":information_source: To stop service, select 'Stop Service'."
+                        )
+                        break
                     else:
                         new_manager.stop()
                         out.print_md(
@@ -1758,9 +1978,19 @@ def main():
 
                 if new_time:
                     export_time = new_time
-                    out.print_md(
-                        ":white_check_mark: Export time set to {}".format(export_time)
-                    )
+                    # Save to config file
+                    if save_export_time(export_time, object_folder_path):
+                        out.print_md(
+                            ":white_check_mark: Export time saved to config: {}".format(
+                                export_time
+                            )
+                        )
+                    else:
+                        out.print_md(
+                            ":warning: Export time set to {} but failed to save to config".format(
+                                export_time
+                            )
+                        )
 
                     if service_running:
                         out.print_md(

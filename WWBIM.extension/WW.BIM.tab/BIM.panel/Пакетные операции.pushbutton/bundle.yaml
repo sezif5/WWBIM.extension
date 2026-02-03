@@ -4,10 +4,10 @@ title:
 
 tooltip:
   ru: >-
-    Пакетные операции с моделями: Открыть, Загрузить семейство (из открытых), Добавить связь.
+    Пакетные операции с моделями: Открыть, Загрузить семейство (из открытых), Добавить связь, Выполнение python скриптов из библиотеки.
     Выбор объекта из txt файлов, затем выбор моделей из списка.
   en_us: >-
-    Batch operations with models: Open, Load family (from open), Add link.
+    Batch operations with models: Open, Load family (from open), Add link, Run python scripts from library.
     Select object from txt files, then select models from list.
 
 author: Vlad

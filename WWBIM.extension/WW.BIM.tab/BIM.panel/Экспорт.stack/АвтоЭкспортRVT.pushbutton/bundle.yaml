@@ -1,0 +1,16 @@
+title:
+  ru: "Авто\nЭкспорт RVT"
+  en_us: "Auto RVT Export"
+
+tooltip:
+  ru: >-
+    Автоматически экспортирует RVT файлы в указанную папку. Читает список объектов из Y:\BIM\Scripts\Objects\AUTO_RVT\AUTO_RVT_Objects.txt, пути из <object>.txt, папку экспорта из <object>_RVT.txt. Файлы открываются в detached режиме (preserve) и сохраняются в целевую папку.
+   
+  en_us: >-
+    Automatically exports RVT files to the specified folder. Reads object list from Y:\BIM\Scripts\Objects\AUTO_RVT\AUTO_RVT_Objects.txt, paths from <object>.txt, export folder from <object>_RVT.txt. Files are opened in detached mode (preserve) and saved to the target folder.
+    
+author: Vlad
+help_url: "Error"
+
+min_revit_version: 2020
+max_revit_version: 2024
