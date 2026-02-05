@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+
+# Windows мусор
+Thumbs.db
+Desktop.ini
+
+# Revit journal / временные логи
+journal.*.txt
+*.journal
+
+# (опционально) ZIP артефакты сборки/экспорта
+*.zip

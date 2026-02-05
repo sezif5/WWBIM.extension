@@ -37,7 +37,7 @@ from model_categories import MODEL_CATEGORIES
 CONFIG = {
     "PARAMETER_NAME": "ADSK_КомплектШифр",
     "BINDING_TYPE": "Instance",
-    "PARAMETER_GROUP": "INVALID",
+    "PARAMETER_GROUP": "PG_IDENTITY_DATA",
 }
 
 
@@ -47,7 +47,7 @@ def EnsureParameterExists(doc):
     param_config = {
         "PARAMETER_NAME": CONFIG["PARAMETER_NAME"],
         "BINDING_TYPE": CONFIG["BINDING_TYPE"],
-        "PARAMETER_GROUP": BuiltInParameterGroup.INVALID,
+        "PARAMETER_GROUP": BuiltInParameterGroup.PG_IDENTITY_DATA,
         "CATEGORIES": MODEL_CATEGORIES,
     }
 
@@ -66,7 +66,7 @@ def DetermineKitMode(doc):
     prefixes = ["AR", "AI", "НАВ", "KM", "KR"]
 
     for prefix in prefixes:
-        if filename.startswith(prefix):
+        if prefix in filename:
             return "Schedules"
 
     return "Views"
@@ -76,7 +76,7 @@ def GetBrowserOrganizationSheetParameter(doc):
     try:
         from Autodesk.Revit.DB import BrowserOrganization
 
-        org = BrowserOrganization.GetCurrentBrowserOrganizationForViews(doc)
+        org = BrowserOrganization.GetCurrentBrowserOrganizationForSheets(doc)
         if org and org.Parameters.Size > 0:
             return org.Parameters.Item(0).GetName()
     except:
@@ -169,24 +169,36 @@ def GetKitCodeParameter(element):
 
 
 def SetKitCodeParameter(element, kit_code):
-    param = element.LookupParameter("ADSK_КомплектШифр")
-    if param and param.StorageType == StorageType.String:
+    try:
+        param = element.LookupParameter("ADSK_КомплектШифр")
+        if not param:
+            return {"status": "parameter_not_found", "reason": "parameter_not_found"}
+
+        if param.StorageType != StorageType.String:
+            return {"status": "wrong_storage_type", "reason": "wrong_storage_type"}
+
+        if param.IsReadOnly:
+            return {"status": "readonly", "reason": "readonly"}
+
         try:
             current_value = param.AsString()
             # Если уже есть значение, выбираем более короткий шифр
             if current_value:
                 if len(kit_code) < len(current_value):
                     param.Set(kit_code)
-                    return True
+                    return {"status": "updated", "reason": None}
                 else:
-                    return False  # Текущий шифр короче или равен - не меняем
+                    return {"status": "already_ok", "reason": "already_ok"}
             else:
                 # Нет значения - устанавливаем новый
                 param.Set(kit_code)
-                return True
+                return {"status": "updated", "reason": None}
         except:
             pass
-    return False
+
+        return {"status": "exception", "reason": "value_is_none"}
+    except Exception as e:
+        return {"status": "exception", "reason": "exception"}
 
 
 def FillKitCodes_Schedules(doc, sheet_param_name, progress_callback=None):
@@ -194,9 +206,16 @@ def FillKitCodes_Schedules(doc, sheet_param_name, progress_callback=None):
         FilteredElementCollector(doc).OfClass(ScheduleSheetInstance).ToElements()
     )
 
-    total_elements = 0
-    updated_elements = 0
-    skipped_elements = 0
+    total = 0
+    updated_count = 0
+    skipped_count = 0
+    skip_reasons = {
+        "parameter_not_found": 0,
+        "readonly": 0,
+        "wrong_storage_type": 0,
+        "already_ok": 0,
+        "exception": 0,
+    }
     all_values = set()
 
     total_schedules = len(schedule_instances)
@@ -217,7 +236,7 @@ def FillKitCodes_Schedules(doc, sheet_param_name, progress_callback=None):
 
         all_values.add(kit_code)
         elements = GetElementsFromSchedule(doc, schedule_inst)
-        total_elements += len(elements)
+        total += len(elements)
 
     current_schedule = 0
 
@@ -246,27 +265,48 @@ def FillKitCodes_Schedules(doc, sheet_param_name, progress_callback=None):
         for element in elements:
             current_value = GetKitCodeParameter(element)
             if not current_value:
-                if SetKitCodeParameter(element, kit_code):
-                    updated_elements += 1
+                result = SetKitCodeParameter(element, kit_code)
+                if result["status"] == "updated":
+                    updated_count += 1
                 else:
-                    skipped_elements += 1
+                    skipped_count += 1
+                    reason = result["reason"]
+                    if reason in skip_reasons:
+                        skip_reasons[reason] += 1
             elif len(kit_code) < len(current_value):
-                if SetKitCodeParameter(element, kit_code):
-                    updated_elements += 1
+                result = SetKitCodeParameter(element, kit_code)
+                if result["status"] == "updated":
+                    updated_count += 1
                 else:
-                    skipped_elements += 1
+                    skipped_count += 1
+                    reason = result["reason"]
+                    if reason in skip_reasons:
+                        skip_reasons[reason] += 1
             else:
-                skipped_elements += 1
+                skipped_count += 1
 
         current_schedule += 1
 
-    filled = updated_elements > 0
+    filled = updated_count > 0
+
+    reasons_str = "; ".join(
+        ["{0}={1}".format(k, v) for k, v in skip_reasons.items() if v > 0]
+    )
+    message = "planned={0}, total={1}, updated={2}, skipped={3}".format(
+        sorted(list(all_values)), total, updated_count, skipped_count
+    )
+    if reasons_str:
+        message += "; reasons: " + reasons_str
+
     return {
-        "total_elements": total_elements,
-        "updated_elements": updated_elements,
-        "skipped_elements": skipped_elements,
+        "planned_value": sorted(list(all_values)),
+        "total": total,
+        "updated_count": updated_count,
+        "skipped_count": skipped_count,
+        "skip_reasons": skip_reasons,
         "values": sorted(list(all_values)),
         "filled": filled,
+        "message": message,
     }
 
 
@@ -281,9 +321,16 @@ def FillKitCodes_Views(doc, sheet_param_name, progress_callback=None):
 
     sheets = FilteredElementCollector(doc).OfClass(ViewSheet).ToElements()
 
-    total_elements = 0
-    updated_elements = 0
-    skipped_elements = 0
+    total = 0
+    updated_count = 0
+    skipped_count = 0
+    skip_reasons = {
+        "parameter_not_found": 0,
+        "readonly": 0,
+        "wrong_storage_type": 0,
+        "already_ok": 0,
+        "exception": 0,
+    }
     all_values = set()
 
     for sheet in sheets:
@@ -301,7 +348,7 @@ def FillKitCodes_Views(doc, sheet_param_name, progress_callback=None):
 
             if view.ViewType in view_types:
                 elements = GetElementsFromView(doc, view)
-                total_elements += len(elements)
+                total += len(elements)
 
     for sheet in sheets:
         kit_code = GetSheetParameter(sheet, sheet_param_name)
@@ -321,25 +368,46 @@ def FillKitCodes_Views(doc, sheet_param_name, progress_callback=None):
                 for element in elements:
                     current_value = GetKitCodeParameter(element)
                     if not current_value:
-                        if SetKitCodeParameter(element, kit_code):
-                            updated_elements += 1
+                        result = SetKitCodeParameter(element, kit_code)
+                        if result["status"] == "updated":
+                            updated_count += 1
                         else:
-                            skipped_elements += 1
+                            skipped_count += 1
+                            reason = result["reason"]
+                            if reason in skip_reasons:
+                                skip_reasons[reason] += 1
                     elif len(kit_code) < len(current_value):
-                        if SetKitCodeParameter(element, kit_code):
-                            updated_elements += 1
+                        result = SetKitCodeParameter(element, kit_code)
+                        if result["status"] == "updated":
+                            updated_count += 1
                         else:
-                            skipped_elements += 1
+                            skipped_count += 1
+                            reason = result["reason"]
+                            if reason in skip_reasons:
+                                skip_reasons[reason] += 1
                     else:
-                        skipped_elements += 1
+                        skipped_count += 1
 
-    filled = updated_elements > 0
+    filled = updated_count > 0
+
+    reasons_str = "; ".join(
+        ["{0}={1}".format(k, v) for k, v in skip_reasons.items() if v > 0]
+    )
+    message = "planned={0}, total={1}, updated={2}, skipped={3}".format(
+        sorted(list(all_values)), total, updated_count, skipped_count
+    )
+    if reasons_str:
+        message += "; reasons: " + reasons_str
+
     return {
-        "total_elements": total_elements,
-        "updated_elements": updated_elements,
-        "skipped_elements": skipped_elements,
+        "planned_value": sorted(list(all_values)),
+        "total": total,
+        "updated_count": updated_count,
+        "skipped_count": skipped_count,
+        "skip_reasons": skip_reasons,
         "values": sorted(list(all_values)),
         "filled": filled,
+        "message": message,
     }
 
 
@@ -356,9 +424,11 @@ def Execute(doc, progress_callback=None):
                 "target_param": "ADSK_КомплектШифр",
                 "source_param": sheet_param_name,
                 "filled": False,
-                "total_elements": 0,
-                "updated_elements": 0,
-                "skipped_elements": 0,
+                "planned_value": None,
+                "total": 0,
+                "updated_count": 0,
+                "skipped_count": 0,
+                "skip_reasons": {},
                 "values": [],
                 "message": "Не удалось определить параметр листа",
             },
@@ -375,6 +445,29 @@ def Execute(doc, progress_callback=None):
 
     try:
         param_result = EnsureParameterExists(doc)
+        
+        # Проверяем результат добавления параметра
+        if not param_result.get("success", False):
+            if not param_result.get("parameters", {}).get("existing"):
+                t.RollBack()
+                return {
+                    "success": False,
+                    "message": param_result.get("message", "Не удалось добавить параметр"),
+                    "parameters": param_result.get("parameters", {"added": [], "existing": [], "failed": []}),
+                    "fill": {
+                        "target_param": "ADSK_КомплектШифр",
+                        "source_param": sheet_param_name,
+                        "filled": False,
+                        "planned_value": None,
+                        "total": 0,
+                        "updated_count": 0,
+                        "skipped_count": 0,
+                        "skip_reasons": {},
+                        "values": [],
+                        "message": "Не удалось добавить параметр",
+                    },
+                }
+        
         if kit_mode == "Schedules":
             fill_result = FillKitCodes_Schedules(
                 doc, sheet_param_name, progress_callback
@@ -394,14 +487,17 @@ def Execute(doc, progress_callback=None):
                 "target_param": "ADSK_КомплектШифр",
                 "source_param": sheet_param_name,
                 "filled": fill_result["filled"],
-                "total_elements": fill_result["total_elements"],
-                "updated_elements": fill_result["updated_elements"],
-                "skipped_elements": fill_result["skipped_elements"],
+                "planned_value": fill_result["planned_value"],
+                "total": fill_result["total"],
+                "updated_count": fill_result["updated_count"],
+                "skipped_count": fill_result["skipped_count"],
+                "skip_reasons": fill_result["skip_reasons"],
                 "values": fill_result["values"],
+                "message": fill_result["message"],
             },
         }
 
-        if not fill_result["filled"] and fill_result["total_elements"] == 0:
+        if not fill_result["filled"] and fill_result["total"] == 0:
             result["fill"]["message"] = (
                 "Заполнение не требовалось: нет элементов для обработки"
             )
@@ -422,9 +518,11 @@ def Execute(doc, progress_callback=None):
                 "target_param": "ADSK_КомплектШифр",
                 "source_param": sheet_param_name,
                 "filled": False,
-                "total_elements": 0,
-                "updated_elements": 0,
-                "skipped_elements": 0,
+                "planned_value": None,
+                "total": 0,
+                "updated_count": 0,
+                "skipped_count": 0,
+                "skip_reasons": {},
                 "values": [],
             },
         }

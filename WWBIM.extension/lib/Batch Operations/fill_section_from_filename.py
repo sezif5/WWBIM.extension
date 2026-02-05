@@ -27,19 +27,19 @@ from model_categories import MODEL_CATEGORIES
 
 CONFIG = {
     "SECTION_PARAMETER": "ADSK_Секция",
-    "PATTERNS": [
-        r"-(\d+)-",
-        r"-(\d+)_",
-        r"_(\d+)-",
-        r"_(\d+)_",
-        r"-([A-Za-z0-9]+)-",
-        r"_([A-Za-z0-9]+)_",
-        r"-(\w+)_",
-    ],
-    "SECTION_POSITION": 3,
-    "PARAMETER_NAME": "ADSK_Секция",
     "BINDING_TYPE": "Instance",
-    "PARAMETER_GROUP": "INVALID",
+    "PARAMETER_GROUP": "PG_IDENTITY_DATA",
+    # Regex паттерны для извлечения секции из имени файла
+    # Группа (1) должна содержать номер секции
+    "PATTERNS": [
+        r"_С(\d+)_",           # _С1_, _С02_ и т.д.
+        r"_Секция(\d+)_",     # _Секция1_, _Секция02_
+        r"_SEC(\d+)_",        # _SEC1_, _SEC02_
+        r"-С(\d+)-",          # -С1-, -С02-
+    ],
+    # Позиция секции в имени файла при разбиении по "_" (0-indexed)
+    # Используется если regex паттерны не сработали
+    "SECTION_POSITION": 2,
 }
 
 
@@ -47,9 +47,9 @@ def EnsureParameterExists(doc):
     from Autodesk.Revit.DB import BuiltInParameterGroup
 
     param_config = {
-        "PARAMETER_NAME": CONFIG["PARAMETER_NAME"],
+        "PARAMETER_NAME": CONFIG["SECTION_PARAMETER"],
         "BINDING_TYPE": CONFIG["BINDING_TYPE"],
-        "PARAMETER_GROUP": BuiltInParameterGroup.INVALID,
+        "PARAMETER_GROUP": BuiltInParameterGroup.PG_IDENTITY_DATA,
         "CATEGORIES": MODEL_CATEGORIES,
     }
 
@@ -96,19 +96,31 @@ def GetParameterValue(element, param_name):
 
 
 def SetParameterValue(element, param_name, value):
-    param = element.LookupParameter(param_name)
-    if param and param.StorageType == StorageType.String:
+    try:
+        param = element.LookupParameter(param_name)
+        if not param:
+            return {"status": "parameter_not_found", "reason": "parameter_not_found"}
+
+        if param.StorageType != StorageType.String:
+            return {"status": "wrong_storage_type", "reason": "wrong_storage_type"}
+
+        if param.IsReadOnly:
+            return {"status": "readonly", "reason": "readonly"}
+
         try:
             current_value = param.AsString()
             if current_value == value:
-                return False
+                return {"status": "already_ok", "reason": "already_ok"}
         except:
             pass
 
         if value is not None:
             param.Set(value)
-            return True
-    return False
+            return {"status": "updated", "reason": None}
+
+        return {"status": "exception", "reason": "value_is_none"}
+    except Exception as e:
+        return {"status": "exception", "reason": "exception"}
 
 
 def FillSectionFromFilename(doc, progress_callback=None):
@@ -117,24 +129,35 @@ def FillSectionFromFilename(doc, progress_callback=None):
 
     if not section:
         return {
-            "total_elements": 0,
-            "updated_elements": 0,
-            "skipped_elements": 0,
+            "planned_value": None,
+            "total": 0,
+            "updated_count": 0,
+            "skipped_count": 0,
+            "skip_reasons": {},
             "values": [],
             "filled": False,
             "message": "Не удалось определить секцию из названия файла",
         }
 
     elements = GetAllElements(doc)
-    total_elements = len(elements)
-    updated_elements = 0
-    skipped_elements = 0
+    total = len(elements)
+    updated_count = 0
+    skipped_count = 0
+    skip_reasons = {
+        "parameter_not_found": 0,
+        "readonly": 0,
+        "wrong_storage_type": 0,
+        "already_ok": 0,
+        "exception": 0,
+    }
 
-    if total_elements == 0:
+    if total == 0:
         return {
-            "total_elements": 0,
-            "updated_elements": 0,
-            "skipped_elements": 0,
+            "planned_value": section,
+            "total": 0,
+            "updated_count": 0,
+            "skipped_count": 0,
+            "skip_reasons": {},
             "values": [],
             "filled": False,
         }
@@ -144,27 +167,40 @@ def FillSectionFromFilename(doc, progress_callback=None):
 
     for element in elements:
         if progress_callback:
-            progress = int((current_index / total_elements) * 100)
+            progress = int((current_index / total) * 100)
             progress_callback(progress)
 
-        current_value = GetParameterValue(element, section_param)
-        if current_value != section:
-            if SetParameterValue(element, section_param, section):
-                updated_elements += 1
-            else:
-                skipped_elements += 1
+        result = SetParameterValue(element, section_param, section)
+        if result["status"] == "updated":
+            updated_count += 1
         else:
-            skipped_elements += 1
+            skipped_count += 1
+            reason = result["reason"]
+            if reason in skip_reasons:
+                skip_reasons[reason] += 1
 
         current_index += 1
 
-    filled = updated_elements > 0
+    filled = updated_count > 0
+
+    reasons_str = "; ".join(
+        ["{0}={1}".format(k, v) for k, v in skip_reasons.items() if v > 0]
+    )
+    message = "planned={0}, total={1}, updated={2}, skipped={3}".format(
+        section, total, updated_count, skipped_count
+    )
+    if reasons_str:
+        message += "; reasons: " + reasons_str
+
     return {
-        "total_elements": total_elements,
-        "updated_elements": updated_elements,
-        "skipped_elements": skipped_elements,
+        "planned_value": section,
+        "total": total,
+        "updated_count": updated_count,
+        "skipped_count": skipped_count,
+        "skip_reasons": skip_reasons,
         "values": [section],
         "filled": filled,
+        "message": message,
     }
 
 
@@ -187,9 +223,11 @@ def Execute(doc, progress_callback=None):
                     "target_param": "ADSK_Секция",
                     "source": "Название файла: {0}".format(filename),
                     "filled": False,
-                    "total_elements": 0,
-                    "updated_elements": 0,
-                    "skipped_elements": 0,
+                    "planned_value": None,
+                    "total": 0,
+                    "updated_count": 0,
+                    "skipped_count": 0,
+                    "skip_reasons": {},
                     "values": [],
                 },
             }
@@ -204,14 +242,17 @@ def Execute(doc, progress_callback=None):
                 "target_param": "ADSK_Секция",
                 "source": "Название файла: {0}".format(filename),
                 "filled": fill_result["filled"],
-                "total_elements": fill_result["total_elements"],
-                "updated_elements": fill_result["updated_elements"],
-                "skipped_elements": fill_result["skipped_elements"],
+                "planned_value": fill_result["planned_value"],
+                "total": fill_result["total"],
+                "updated_count": fill_result["updated_count"],
+                "skipped_count": fill_result["skipped_count"],
+                "skip_reasons": fill_result["skip_reasons"],
                 "values": fill_result["values"],
+                "message": fill_result["message"],
             },
         }
 
-        if not fill_result["filled"] and fill_result["total_elements"] == 0:
+        if not fill_result["filled"] and fill_result["total"] == 0:
             result["fill"]["message"] = (
                 "Заполнение не требовалось: нет элементов для обработки"
             )
@@ -232,9 +273,11 @@ def Execute(doc, progress_callback=None):
                 "target_param": "ADSK_Секция",
                 "source": "Название файла: {0}".format(filename),
                 "filled": False,
-                "total_elements": 0,
-                "updated_elements": 0,
-                "skipped_elements": 0,
+                "planned_value": None,
+                "total": 0,
+                "updated_count": 0,
+                "skipped_count": 0,
+                "skip_reasons": {},
                 "values": [],
             },
         }

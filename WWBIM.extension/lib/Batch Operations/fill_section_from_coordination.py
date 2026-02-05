@@ -3,7 +3,6 @@ from __future__ import unicode_literals
 
 import sys
 import os
-import inspect
 
 from Autodesk.Revit.DB import (
     BuiltInParameter,
@@ -12,6 +11,7 @@ from Autodesk.Revit.DB import (
     ElementId,
     FilteredElementCollector,
     Transaction,
+    TransactionStatus,
     StorageType,
     FamilyInstance,
     RevitLinkInstance,
@@ -28,27 +28,51 @@ from Autodesk.Revit.DB import (
 
 from System.Collections.Generic import List
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 LIB_DIR = os.path.normpath(os.path.join(SCRIPT_DIR, ".."))
 sys.path.insert(0, LIB_DIR)
+
+
+# ---------- Пути ----------
+
+
+def _norm(p):
+    return os.path.normpath(os.path.abspath(p)) if p else p
+
+
+def _module_dir():
+    try:
+        return os.path.dirname(os.path.abspath(__file__))
+    except Exception:
+        return os.getcwd()
+
+
+def _find_scripts_root(start_dir):
+    cur = _norm(start_dir)
+    for _ in range(0, 8):
+        if os.path.basename(cur).lower() == "scripts":
+            return cur
+        parent = os.path.dirname(cur)
+        if not parent or parent == cur:
+            break
+        cur = parent
+    return _norm(os.path.join(start_dir, os.pardir, os.pardir))
+
+
+SCRIPTS_ROOT = _find_scripts_root(_module_dir())
+OBJECTS_DIR = _norm(os.path.join(SCRIPTS_ROOT, "Objects"))
 
 import openbg
 import closebg
 from model_categories import MODEL_CATEGORIES
-from add_shared_parameter import (
-    AddSharedParameterToDoc,
-    BindParameter,
-    GetSharedParameterFile,
-)
-
-out = script.get_output()
+from add_shared_parameter import AddSharedParameterToDoc
 
 # ---------- Config ----------
 
 CONFIG = {
     "PARAMETER_NAME": "ADSK_Секция",
     "BINDING_TYPE": "instance",
-    "PARAMETER_GROUP": None,
+    "PARAMETER_GROUP": "PG_IDENTITY_DATA",
     "CATEGORIES": MODEL_CATEGORIES,
 }
 
@@ -122,14 +146,31 @@ def GetParameterValue(element, param_name):
 
 
 def SetParameterValue(element, param_name, value):
-    param = element.LookupParameter(param_name)
-    if not param or param.IsReadOnly:
-        return False
     try:
-        param.Set(value)
-        return True
-    except Exception:
-        return False
+        param = element.LookupParameter(param_name)
+        if not param:
+            return {"status": "parameter_not_found", "reason": "parameter_not_found"}
+
+        if param.StorageType != StorageType.String:
+            return {"status": "wrong_storage_type", "reason": "wrong_storage_type"}
+
+        if param.IsReadOnly:
+            return {"status": "readonly", "reason": "readonly"}
+
+        try:
+            current_value = param.AsString()
+            if current_value == value:
+                return {"status": "already_ok", "reason": "already_ok"}
+        except:
+            pass
+
+        if value is not None:
+            param.Set(value)
+            return {"status": "updated", "reason": None}
+
+        return {"status": "exception", "reason": "value_is_none"}
+    except Exception as e:
+        return {"status": "exception", "reason": "exception"}
 
 
 def solids_of_element(el):
@@ -217,7 +258,7 @@ def EnsureParameterExists(doc):
     param_config = {
         "PARAMETER_NAME": CONFIG["PARAMETER_NAME"],
         "BINDING_TYPE": CONFIG["BINDING_TYPE"],
-        "PARAMETER_GROUP": BuiltInParameterGroup.INVALID,
+        "PARAMETER_GROUP": BuiltInParameterGroup.PG_IDENTITY_DATA,
         "CATEGORIES": MODEL_CATEGORIES,
     }
 
@@ -232,17 +273,13 @@ def EnsureParameterExists(doc):
 
 
 def FindCoordinationFile(doc, objects_dir):
-    """Найти txt файл объекта и определить путь к координационному файлу."""
+    """Найти координационный txt файл и получить путь к модели с _CR_."""
     model_name = os.path.splitext(doc.Title)[0]
 
-    # Ищем txt файл с именем модели
-    txt_path = os.path.join(objects_dir, model_name + ".txt")
-    if not os.path.exists(txt_path):
-        return None, "Не найден txt файл объекта: {0}".format(model_name + ".txt")
-
-    # Формируем путь к координационному txt файлу (добавляем _SERV)
+    # Формируем имя координационного txt файла (добавляем _SERV)
     coord_txt_name = model_name + "_SERV.txt"
     coord_txt_path = os.path.join(objects_dir, coord_txt_name)
+
     if not os.path.exists(coord_txt_path):
         return None, "Не найден координационный txt файл: {0}".format(coord_txt_name)
 
@@ -285,41 +322,40 @@ def FillSectionsFromCoordination(doc, progress_callback=None):
     fails = []
 
     # Находим путь к координационному файлу
-    objects_dir = os.path.join(os.path.dirname(doc.PathName), "Objects")
-    if not os.path.isdir(objects_dir):
+    if not os.path.isdir(OBJECTS_DIR):
         return {
             "success": False,
-            "message": "Папка Objects не найдена",
-            "parameters": {"added": [], "existing": [], "failed": []},
+            "message": "Папка Objects не найдена: {0}".format(OBJECTS_DIR),
             "fill": {
                 "target_param": SECTION_PARAM,
                 "source": "Координационный файл",
                 "filled": False,
-                "total_elements": 0,
-                "updated_elements": 0,
-                "skipped_elements": 0,
+                "planned_value": None,
+                "total": 0,
+                "updated_count": 0,
+                "skipped_count": 0,
+                "skip_reasons": {},
                 "values": [],
             },
         }
 
-    coord_path, error = FindCoordinationFile(doc, objects_dir)
+    coord_path, error = FindCoordinationFile(doc, OBJECTS_DIR)
     if error:
         return {
             "success": False,
             "message": error,
-            "parameters": {"added": [], "existing": [], "failed": []},
             "fill": {
                 "target_param": SECTION_PARAM,
                 "source": "Координационный файл",
                 "filled": False,
-                "total_elements": 0,
-                "updated_elements": 0,
-                "skipped_elements": 0,
+                "planned_value": None,
+                "total": 0,
+                "updated_count": 0,
+                "skipped_count": 0,
+                "skip_reasons": {},
                 "values": [],
             },
         }
-
-    out.print_md("Координационный файл: `{0}`".format(coord_path))
 
     # Открываем координационный файл в фоне
     coord_doc = None
@@ -346,9 +382,11 @@ def FillSectionsFromCoordination(doc, progress_callback=None):
                 "target_param": SECTION_PARAM,
                 "source": "Координационный файл",
                 "filled": False,
-                "total_elements": 0,
-                "updated_elements": 0,
-                "skipped_elements": 0,
+                "planned_value": None,
+                "total": 0,
+                "updated_count": 0,
+                "skipped_count": 0,
+                "skip_reasons": {},
                 "values": [],
             },
         }
@@ -362,9 +400,11 @@ def FillSectionsFromCoordination(doc, progress_callback=None):
                 "target_param": SECTION_PARAM,
                 "source": "Координационный файл",
                 "filled": False,
-                "total_elements": 0,
-                "updated_elements": 0,
-                "skipped_elements": 0,
+                "planned_value": None,
+                "total": 0,
+                "updated_count": 0,
+                "skipped_count": 0,
+                "skip_reasons": {},
                 "values": [],
             },
         }
@@ -396,40 +436,42 @@ def FillSectionsFromCoordination(doc, progress_callback=None):
             return {
                 "success": False,
                 "message": "Не найдены объёмы (Антураж) с номером секции",
-                "parameters": {"added": [], "existing": [], "failed": []},
                 "fill": {
                     "target_param": SECTION_PARAM,
                     "source": "Координационный файл",
                     "filled": False,
-                    "total_elements": 0,
-                    "updated_elements": 0,
-                    "skipped_elements": 0,
+                    "planned_value": None,
+                    "total": 0,
+                    "updated_count": 0,
+                    "skipped_count": 0,
+                    "skip_reasons": {},
                     "values": [],
                 },
             }
 
-        out.print_md(
-            "Найдено объёмов (Антураж): {0}, секций: {1}".format(
-                len(volumes), len(set(v["section"] for v in volumes))
-            )
-        )
-
         # Подготавливаем фильтр
         mcat_filter = multicategory_filter()
         assigned = {}
-        total_elements = 0
-        updated_elements = 0
-        skipped_elements = 0
+        total = 0
+        updated_count = 0
+        skipped_count = 0
+        skip_reasons = {
+            "parameter_not_found": 0,
+            "readonly": 0,
+            "wrong_storage_type": 0,
+            "already_ok": 0,
+            "exception": 0,
+        }
         all_values = set()
 
         # Проходим по объёмам и заполняем секции
-        for v in volumes:
+        for i, v in enumerate(volumes):
             solid = v["solid"]
             section = v["section"]
             all_values.add(section)
 
             if progress_callback:
-                progress = int((volumes.index(v) / float(len(volumes))) * 100)
+                progress = int((i / float(len(volumes))) * 100)
                 progress_callback(progress)
 
             col = (
@@ -444,7 +486,7 @@ def FillSectionsFromCoordination(doc, progress_callback=None):
                 if isinstance(el, RevitLinkInstance):
                     continue
 
-                total_elements += 1
+                total += 1
 
                 eid = el.Id.IntegerValue
 
@@ -459,30 +501,63 @@ def FillSectionsFromCoordination(doc, progress_callback=None):
                     )
                     continue
 
-                ok_any = True
+                ok_any = False
                 for tgt in iter_with_subcomponents(el):
-                    ok, reason = SetParameterValue(tgt, SECTION_PARAM, section)
-                    if not ok:
-                        ok_any = False
-                        fails.append([str(tgt.Id), family_label(tgt), reason or ""])
+                    result = SetParameterValue(tgt, SECTION_PARAM, section)
+                    if result["status"] == "updated":
+                        ok_any = True
+                    else:
+                        reason = result["reason"]
+                        if reason in skip_reasons:
+                            skip_reasons[reason] += 1
+                        fails.append([str(tgt.Id), family_label(tgt), reason])
 
                 if ok_any:
-                    updated_elements += 1
+                    updated_count += 1
                     assigned[eid] = section
                 else:
-                    skipped_elements += 1
+                    skipped_count += 1
 
-        filled = updated_elements > 0
+        filled = updated_count > 0
+
+        # Формируем сообщение с проблемами
+        info_messages = []
+        if skipped:
+            info_messages.append("Пропущено объёмов: {0}".format(len(skipped)))
+        if conflicts:
+            info_messages.append("Конфликтов: {0}".format(len(conflicts)))
+        if fails:
+            info_messages.append("Ошибок записи: {0}".format(len(fails)))
+
+        reasons_str = "; ".join(
+            ["{0}={1}".format(k, v) for k, v in skip_reasons.items() if v > 0]
+        )
+        message_parts = []
+        message_parts.append("total={0}".format(total))
+        message_parts.append("updated={0}".format(updated_count))
+        message_parts.append("skipped={0}".format(skipped_count))
+        if reasons_str:
+            message_parts.append("reasons: " + reasons_str)
+        if info_messages:
+            message_parts.append("; ".join(info_messages))
+
+        message = ", ".join(message_parts)
 
         return {
-            "total_elements": total_elements,
-            "updated_elements": updated_elements,
-            "skipped_elements": skipped_elements,
-            "values": sorted(list(all_values)),
-            "conflicts": conflicts,
-            "fails": fails,
-            "skipped_volumes": skipped,
-            "filled": filled,
+            "success": True,
+            "message": message,
+            "fill": {
+                "target_param": SECTION_PARAM,
+                "source": "Координационный файл",
+                "filled": filled,
+                "planned_value": sorted(list(all_values)),
+                "total": total,
+                "updated_count": updated_count,
+                "skipped_count": skipped_count,
+                "skip_reasons": skip_reasons,
+                "values": sorted(list(all_values)),
+                "message": message,
+            },
         }
 
     finally:
@@ -502,65 +577,73 @@ def FillSectionsFromCoordination(doc, progress_callback=None):
 
 
 def Execute(doc, progress_callback=None):
-    t = Transaction(doc, "Заполнение параметра ADSK_Номер секции")
-    t.Start()
-
     param_result = {
         "success": False,
         "parameters": {"added": [], "existing": [], "failed": []},
         "message": "Параметр не был добавлен",
     }
 
+    t = None
+
     try:
+        # Если документ уже модифицируется - работаем без транзакции
+        if doc.IsModifiable:
+            param_result = EnsureParameterExists(doc)
+            if not param_result["success"]:
+                return {
+                    "success": False,
+                    "message": param_result["message"],
+                    "parameters": param_result["parameters"],
+                }
+
+            fill_result = FillSectionsFromCoordination(doc, progress_callback)
+
+            result = {
+                "success": fill_result["success"],
+                "parameters": param_result["parameters"],
+                "message": fill_result["message"],
+                "fill": fill_result["fill"],
+            }
+
+            return result
+
+        # Иначе стартуем свою транзакцию
+        t = Transaction(doc, "Заполнение параметра ADSK_Номер секции")
+        t.Start()
+
         param_result = EnsureParameterExists(doc)
+        if not param_result["success"]:
+            try:
+                t.RollBack()
+            except Exception:
+                pass
+            return {
+                "success": False,
+                "message": param_result["message"],
+                "parameters": param_result["parameters"],
+            }
+
         fill_result = FillSectionsFromCoordination(doc, progress_callback)
 
         t.Commit()
 
         result = {
-            "success": True,
+            "success": fill_result["success"],
             "parameters": param_result["parameters"],
-            "message": param_result["message"],
-            "fill": {
-                "target_param": SECTION_PARAM,
-                "source": "Координационный файл",
-                "filled": fill_result["filled"],
-                "total_elements": fill_result["total_elements"],
-                "updated_elements": fill_result["updated_elements"],
-                "skipped_elements": fill_result["skipped_elements"],
-                "values": fill_result["values"],
-            },
+            "message": fill_result["message"],
+            "fill": fill_result["fill"],
         }
-
-        # Отчёты о проблемах
-        if fill_result.get("skipped_volumes"):
-            out.print_md("### Пропущенные объёмы")
-            for msg in fill_result["skipped_volumes"]:
-                out.print_md("- {0}".format(msg))
-
-        if fill_result.get("conflicts"):
-            out.print_md("### Конфликты (элемент попал в разные объёмы)")
-            for c in fill_result["conflicts"]:
-                out.print_md("- ID: {0}, {1}: {2}".format(c[0], c[1], c[2]))
-
-        if fill_result.get("fails"):
-            out.print_md("### Не удалось записать параметр")
-            for f in fill_result["fails"]:
-                out.print_md("- ID: {0}, {1}: {2}".format(f[0], f[1], f[2]))
-
-        if not fill_result["filled"] and fill_result["total_elements"] == 0:
-            result["fill"]["message"] = (
-                "Заполнение не требовалось: нет элементов для обработки"
-            )
-        elif not fill_result["filled"]:
-            result["fill"]["message"] = (
-                "Заполнение не требовалось: все элементы уже имели правильные значения"
-            )
 
         return result
 
     except Exception as e:
-        t.RollBack()
+        # Откатываем только если транзакция была стартована
+        if t and t.GetStatus() == TransactionStatus.Started:
+            try:
+                t.RollBack()
+            except Exception:
+                pass
+
         return {
             "success": False,
             "message": "Ошибка: {0}".format(str(e)),
@@ -569,9 +652,11 @@ def Execute(doc, progress_callback=None):
                 "target_param": SECTION_PARAM,
                 "source": "Координационный файл",
                 "filled": False,
-                "total_elements": 0,
-                "updated_elements": 0,
-                "skipped_elements": 0,
+                "planned_value": None,
+                "total": 0,
+                "updated_count": 0,
+                "skipped_count": 0,
+                "skip_reasons": {},
                 "values": [],
             },
         }

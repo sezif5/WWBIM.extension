@@ -2,18 +2,10 @@
 from __future__ import unicode_literals
 import sys
 import os
-import inspect
 
-try:
-    script_path = inspect.getfile(inspect.currentframe())
-    lib_dir = os.path.dirname(os.path.dirname(script_path))
-    SCRIPT_DIR = os.path.dirname(script_path)
-except:
-    lib_dir = os.path.dirname(os.getcwd())
-    SCRIPT_DIR = os.getcwd()
-
-if lib_dir not in sys.path:
-    sys.path.insert(0, lib_dir)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+LIB_DIR = os.path.normpath(os.path.join(SCRIPT_DIR, ".."))
+sys.path.insert(0, LIB_DIR)
 
 from Autodesk.Revit.DB import (
     FilteredElementCollector,
@@ -26,14 +18,48 @@ from add_shared_parameter import AddSharedParameterToDoc
 from model_categories import MODEL_CATEGORIES
 
 
+# ---------- Пути ----------
+
+
+def _norm(p):
+    return os.path.normpath(os.path.abspath(p)) if p else p
+
+
+def _module_dir():
+    try:
+        return os.path.dirname(os.path.abspath(__file__))
+    except Exception:
+        return os.getcwd()
+
+
+def _find_scripts_root(start_dir):
+    cur = _norm(start_dir)
+    for _ in range(0, 8):
+        if os.path.basename(cur).lower() == "scripts":
+            return cur
+        parent = os.path.dirname(cur)
+        if not parent or parent == cur:
+            break
+        cur = parent
+    return _norm(os.path.join(start_dir, os.pardir, os.pardir))
+
+
+SCRIPTS_ROOT = _find_scripts_root(_module_dir())
+OBJECTS_DIR = _norm(os.path.join(SCRIPTS_ROOT, "Objects"))
+
+
 CONFIG = {
     "ALBUM_PARAMETER": "ADSK_КомплектШифр",
     "SECTION_PARAMETER": "ADSK_Секция",
-    "MAPPING_FILE": "..\\Objects\\album_section_mapping.txt",
+    "MAPPING_FILE": None,
     "PARAMETER_NAME": "ADSK_Секция",
     "BINDING_TYPE": "Instance",
-    "PARAMETER_GROUP": "INVALID",
+    "PARAMETER_GROUP": "PG_IDENTITY_DATA",
+    "CATEGORIES": MODEL_CATEGORIES,
 }
+
+# Заполняем MAPPING_FILE абсолютным путём
+CONFIG["MAPPING_FILE"] = os.path.join(OBJECTS_DIR, "album_section_mapping.txt")
 
 
 def EnsureParameterExists(doc):
@@ -42,7 +68,7 @@ def EnsureParameterExists(doc):
     param_config = {
         "PARAMETER_NAME": CONFIG["PARAMETER_NAME"],
         "BINDING_TYPE": CONFIG["BINDING_TYPE"],
-        "PARAMETER_GROUP": BuiltInParameterGroup.INVALID,
+        "PARAMETER_GROUP": BuiltInParameterGroup.PG_IDENTITY_DATA,
         "CATEGORIES": MODEL_CATEGORIES,
     }
 
@@ -63,7 +89,7 @@ def ReadMappingFile(mapping_file_path):
         return mapping
 
     try:
-        with open(mapping_file_path, "r", encoding="tf-8") as f:
+        with open(mapping_file_path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#"):
@@ -95,33 +121,54 @@ def GetParameterValue(element, param_name):
 
 
 def SetParameterValue(element, param_name, value):
-    param = element.LookupParameter(param_name)
-    if param and param.StorageType == StorageType.String:
+    try:
+        param = element.LookupParameter(param_name)
+        if not param:
+            return {"status": "parameter_not_found", "reason": "parameter_not_found"}
+
+        if param.StorageType != StorageType.String:
+            return {"status": "wrong_storage_type", "reason": "wrong_storage_type"}
+
+        if param.IsReadOnly:
+            return {"status": "readonly", "reason": "readonly"}
+
         try:
             current_value = param.AsString()
             if current_value == value:
-                return False
+                return {"status": "already_ok", "reason": "already_ok"}
         except:
             pass
 
         if value is not None:
             param.Set(value)
-            return True
-    return False
+            return {"status": "updated", "reason": None}
+
+        return {"status": "exception", "reason": "value_is_none"}
+    except Exception as e:
+        return {"status": "exception", "reason": "exception"}
 
 
 def FillSectionParameter(doc, mapping, progress_callback=None):
     elements = GetAllElements(doc)
-    total_elements = len(elements)
-    updated_elements = 0
-    skipped_elements = 0
+    total = len(elements)
+    updated_count = 0
+    skipped_count = 0
+    skip_reasons = {
+        "parameter_not_found": 0,
+        "readonly": 0,
+        "wrong_storage_type": 0,
+        "already_ok": 0,
+        "exception": 0,
+    }
     all_values = set()
 
-    if total_elements == 0:
+    if total == 0:
         return {
-            "total_elements": 0,
-            "updated_elements": 0,
-            "skipped_elements": 0,
+            "planned_value": None,
+            "total": 0,
+            "updated_count": 0,
+            "skipped_count": 0,
+            "skip_reasons": {},
             "values": [],
             "filled": False,
         }
@@ -132,34 +179,51 @@ def FillSectionParameter(doc, mapping, progress_callback=None):
 
     for element in elements:
         if progress_callback:
-            progress = int((current_index / total_elements) * 100)
+            progress = int((current_index / total) * 100)
             progress_callback(progress)
 
         album_value = GetParameterValue(element, album_param)
         if album_value and album_value in mapping:
             section_value = mapping[album_value]
             all_values.add(section_value)
-            if SetParameterValue(element, section_param, section_value):
-                updated_elements += 1
+            result = SetParameterValue(element, section_param, section_value)
+            if result["status"] == "updated":
+                updated_count += 1
             else:
-                skipped_elements += 1
+                skipped_count += 1
+                reason = result["reason"]
+                if reason in skip_reasons:
+                    skip_reasons[reason] += 1
         else:
-            skipped_elements += 1
+            skipped_count += 1
 
         current_index += 1
 
-    filled = updated_elements > 0
+    filled = updated_count > 0
+
+    reasons_str = "; ".join(
+        ["{0}={1}".format(k, v) for k, v in skip_reasons.items() if v > 0]
+    )
+    message = "planned={0}, total={1}, updated={2}, skipped={3}".format(
+        sorted(list(all_values)), total, updated_count, skipped_count
+    )
+    if reasons_str:
+        message += "; reasons: " + reasons_str
+
     return {
-        "total_elements": total_elements,
-        "updated_elements": updated_elements,
-        "skipped_elements": skipped_elements,
+        "planned_value": sorted(list(all_values)),
+        "total": total,
+        "updated_count": updated_count,
+        "skipped_count": skipped_count,
+        "skip_reasons": skip_reasons,
         "values": sorted(list(all_values)),
         "filled": filled,
+        "message": message,
     }
 
 
 def Execute(doc, progress_callback=None):
-    mapping_file = os.path.join(SCRIPT_DIR, CONFIG["MAPPING_FILE"])
+    mapping_file = CONFIG["MAPPING_FILE"]
 
     if not os.path.exists(mapping_file):
         return {
@@ -170,9 +234,11 @@ def Execute(doc, progress_callback=None):
                 "target_param": "ADSK_Секция",
                 "source": CONFIG["MAPPING_FILE"],
                 "filled": False,
-                "total_elements": 0,
-                "updated_elements": 0,
-                "skipped_elements": 0,
+                "planned_value": None,
+                "total": 0,
+                "updated_count": 0,
+                "skipped_count": 0,
+                "skip_reasons": {},
                 "values": [],
                 "message": "Файл соответствия не найден",
             },
@@ -188,9 +254,11 @@ def Execute(doc, progress_callback=None):
                 "target_param": "ADSK_Секция",
                 "source": CONFIG["MAPPING_FILE"],
                 "filled": False,
-                "total_elements": 0,
-                "updated_elements": 0,
-                "skipped_elements": 0,
+                "planned_value": None,
+                "total": 0,
+                "updated_count": 0,
+                "skipped_count": 0,
+                "skip_reasons": {},
                 "values": [],
                 "message": "Файл соответствия пуст",
             },
@@ -201,6 +269,30 @@ def Execute(doc, progress_callback=None):
 
     try:
         param_result = EnsureParameterExists(doc)
+        
+        # Проверяем результат добавления параметра
+        if not param_result.get("success", False):
+            if not param_result.get("parameters", {}).get("existing"):
+                t.RollBack()
+                return {
+                    "success": False,
+                    "message": param_result.get("message", "Не удалось добавить параметр"),
+                    "parameters": param_result.get("parameters", {"added": [], "existing": [], "failed": []}),
+                    "fill": {
+                        "target_param": "ADSK_Секция",
+                        "source": CONFIG["MAPPING_FILE"],
+                        "filled": False,
+                        "planned_value": None,
+                        "total": 0,
+                        "updated_count": 0,
+                        "skipped_count": 0,
+                        "skip_reasons": {},
+                        "values": [],
+                        "mapping_count": len(mapping),
+                        "message": "Не удалось добавить параметр",
+                    },
+                }
+        
         fill_result = FillSectionParameter(doc, mapping, progress_callback)
 
         t.Commit()
@@ -213,15 +305,18 @@ def Execute(doc, progress_callback=None):
                 "target_param": "ADSK_Секция",
                 "source": CONFIG["MAPPING_FILE"],
                 "filled": fill_result["filled"],
-                "total_elements": fill_result["total_elements"],
-                "updated_elements": fill_result["updated_elements"],
-                "skipped_elements": fill_result["skipped_elements"],
+                "planned_value": fill_result["planned_value"],
+                "total": fill_result["total"],
+                "updated_count": fill_result["updated_count"],
+                "skipped_count": fill_result["skipped_count"],
+                "skip_reasons": fill_result["skip_reasons"],
                 "values": fill_result["values"],
                 "mapping_count": len(mapping),
+                "message": fill_result["message"],
             },
         }
 
-        if not fill_result["filled"] and fill_result["total_elements"] == 0:
+        if not fill_result["filled"] and fill_result["total"] == 0:
             result["fill"]["message"] = (
                 "Заполнение не требовалось: нет элементов для обработки"
             )
@@ -242,9 +337,11 @@ def Execute(doc, progress_callback=None):
                 "target_param": "ADSK_Секция",
                 "source": CONFIG["MAPPING_FILE"],
                 "filled": False,
-                "total_elements": 0,
-                "updated_elements": 0,
-                "skipped_elements": 0,
+                "planned_value": None,
+                "total": 0,
+                "updated_count": 0,
+                "skipped_count": 0,
+                "skip_reasons": {},
                 "values": [],
                 "mapping_count": len(mapping),
             },

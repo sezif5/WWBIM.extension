@@ -304,7 +304,7 @@ def export_view_to_nwc(doc, view, target_folder, file_wo_ext):
     except Exception:
         api_ok = False
     out_path = os.path.join(target_folder, file_wo_ext + ".nwc")
-        return api_ok, out_path
+    return api_ok, out_path
 
 
 def pick_models():
