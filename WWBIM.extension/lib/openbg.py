@@ -111,6 +111,7 @@ class DialogSuppressor(object):
         self.suppressed_dialogs = []
         self._uiapp = None
         self._log_only = log_only
+        self.transmitted_dialog_handled = 0
 
     def _on_task_dialog_showing(self, sender, args):
         """
@@ -127,11 +128,19 @@ class DialogSuppressor(object):
             dialog_id = args.DialogId or ""
             message = args.Message
 
+            # Для диагностики: если DialogId содержит "transmitted" или текст соответствует, логируем детально
+            main_instruction = ""
+            try:
+                main_instruction = args.MainInstruction or ""
+            except Exception:
+                pass
+
             # Логируем информацию о диалоге
             dialog_info = {
                 "dialog_id": dialog_id,
                 "type": "TaskDialogShowingEventArgs",
                 "message": message,
+                "main_instruction": main_instruction,
                 "action": "logged" if self._log_only else "unknown",
             }
             self.suppressed_dialogs.append(dialog_info)
@@ -141,6 +150,7 @@ class DialogSuppressor(object):
                 return
 
             message_lower = (message or "").lower()
+            main_instruction_lower = (main_instruction or "").lower()
             identifier_lower = dialog_id.lower()
 
             # 1. Проверка по DialogId (как в C# IsSuppressedDialog)
@@ -219,6 +229,23 @@ class DialogSuppressor(object):
             ):
                 dialog_info["action"] = "suppressed (OK)"
                 args.OverrideResult(TaskDialogResult.Ok)
+                return
+
+            # 6. Transmitted model dialog → CommandLink1 (Save this model)
+            # Проверяем по DialogId и тексту диалога (рус/англ) - в message И main_instruction
+            full_text = message_lower + " " + main_instruction_lower
+            if "transmitted" in identifier_lower or any(
+                kw in full_text
+                for kw in [
+                    "переданная модель",
+                    "данная модель была получена из другой папки",
+                    "transmitted model",
+                    "received from another folder",
+                ]
+            ):
+                dialog_info["action"] = "suppressed (CommandLink1 - Save this model)"
+                args.OverrideResult(TaskDialogResult.CommandLink1)
+                self.transmitted_dialog_handled += 1
                 return
 
             # Неизвестный диалог - не трогаем, пусть Revit покажет
@@ -407,17 +434,35 @@ class DialogSuppressor(object):
             d for d in self.suppressed_dialogs if d.get("action") == "handler_error"
         ]
 
+        # Формируем краткое описание unknown диалогов (первые 5)
+        unknown_dialogs_brief = []
+        max_brief = 5
+        for d in unknown[:max_brief]:
+            dialog_id = d.get("dialog_id", "")
+            message = d.get("message", "") or ""
+            main_instruction = d.get("main_instruction", "") or ""
+            # Объединяем message и main_instruction, обрезаем до 120 символов
+            combined_text = (main_instruction + " " + message).strip()[:120]
+            unknown_dialogs_brief.append(
+                {
+                    "dialog_id": dialog_id,
+                    "text_preview": combined_text,
+                }
+            )
+
         return {
             "total": len(self.suppressed_dialogs),
             "suppressed": len(suppressed),
             "logged": len(logged),
             "unknown": len(unknown),
             "errors": len(errors),
+            "transmitted_dialog_handled": self.transmitted_dialog_handled,
             "dialogs": list(self.suppressed_dialogs),
             "suppressed_dialogs": suppressed,
             "logged_dialogs": logged,
             "unknown_dialogs": unknown,
             "error_dialogs": errors,
+            "unknown_dialogs_brief": unknown_dialogs_brief,
         }
 
     def __enter__(self):
@@ -711,12 +756,16 @@ def open_in_background(
     Открыть документ в фоне.
 
     Args:
+        app_or_uiapp: Application или UIApplication. Для работы подавления диалогов
+                     (suppress_dialogs=True) необходимо передать UIApplication (в pyRevit это __revit__)
+        maybe_uiapp: UIApplication (опционально, если app_or_uiapp — Application)
+        model_path_or_str: путь к модели (строка или ModelPath)
         detach: если True — открыть с опцией "Отсоединить с сохранением рабочих наборов"
                 (DetachAndPreserveWorksets)
         suppress_warnings: если True — автоматически подавлять предупреждения и ошибки при открытии
                           (через IFailuresPreprocessor)
         suppress_dialogs: если True — автоматически закрывать диалоговые окна Revit
-                         (через DialogBoxShowing event)
+                         (через DialogBoxShowing event). ВАЖНО: для работы требует UIApplication!
         log_only: если True — только логировать диалоги, не подавлять (для отладки)
 
     Returns:

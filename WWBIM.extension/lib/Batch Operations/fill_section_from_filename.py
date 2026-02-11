@@ -32,10 +32,12 @@ CONFIG = {
     # Regex паттерны для извлечения секции из имени файла
     # Группа (1) должна содержать номер секции
     "PATTERNS": [
-        r"_С(\d+)_",           # _С1_, _С02_ и т.д.
-        r"_Секция(\d+)_",     # _Секция1_, _Секция02_
-        r"_SEC(\d+)_",        # _SEC1_, _SEC02_
-        r"-С(\d+)-",          # -С1-, -С02-
+        r"_[^_]+-(\d+)_",  # 3A-33_, 2B-5_ и т.д.
+        r"_[^_]+-([A-Za-z0-9-]+)_",  # 3A-Parking_, 2B-Warehouse_ и т.д.
+        r"_С(\d+)_",  # _С1_, _С02_ и т.д.
+        r"_Секция(\d+)_",  # _Секция1_, _Секция02_
+        r"_SEC(\d+)_",  # _SEC1_, _SEC02_
+        r"-С(\d+)-",  # -С1-, -С02-
     ],
     # Позиция секции в имени файла при разбиении по "_" (0-indexed)
     # Используется если regex паттерны не сработали
@@ -63,11 +65,26 @@ def EnsureParameterExists(doc):
         }
 
 
+SECTION_TRANSLATIONS = {
+    "parking": "Паркинг",
+    "warehouse": "Склад",
+    "retail": "Торговая",
+    "office": "Офисная",
+}
+
+
+def NormalizeSectionValue(value):
+    if not value:
+        return value
+    value_lower = value.lower()
+    return SECTION_TRANSLATIONS.get(value_lower, value)
+
+
 def ExtractSectionFromFilename(filename):
     for pattern in CONFIG["PATTERNS"]:
         match = re.search(pattern, filename)
         if match:
-            return match.group(1)
+            return NormalizeSectionValue(match.group(1))
 
     parts = filename.split("_")
     parts_count = len(parts)
@@ -77,8 +94,8 @@ def ExtractSectionFromFilename(filename):
         part = parts[section_index]
         if "-" in part:
             section_part = part.split("-")[-1]
-            return section_part
-        return part
+            return NormalizeSectionValue(section_part)
+        return NormalizeSectionValue(part)
 
     return None
 

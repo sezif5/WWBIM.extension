@@ -26,6 +26,7 @@ from Autodesk.Revit.DB import (
     ViewType,
     FamilyInstance,
     Transaction,
+    LabelUtils,
 )
 import System
 from System.Collections.Generic import List
@@ -63,7 +64,7 @@ def EnsureParameterExists(doc):
 
 def DetermineKitMode(doc):
     filename = doc.Title.upper()
-    prefixes = ["AR", "AI", "НАВ", "KM", "KR"]
+    prefixes = ["AR", "AI", "НАВ", "KM", "KR", "KG"]
 
     for prefix in prefixes:
         if prefix in filename:
@@ -72,29 +73,104 @@ def DetermineKitMode(doc):
     return "Views"
 
 
-def GetBrowserOrganizationSheetParameter(doc):
+def SafeParamElemName(param_elem):
     try:
-        from Autodesk.Revit.DB import BrowserOrganization
-
-        org = BrowserOrganization.GetCurrentBrowserOrganizationForSheets(doc)
-        if org and org.Parameters.Size > 0:
-            return org.Parameters.Item(0).GetName()
+        if hasattr(param_elem, "GetDefinition"):
+            definition = param_elem.GetDefinition()
+            if definition:
+                return definition.Name
     except:
         pass
-    return None
+    try:
+        return param_elem.Name
+    except:
+        return None
+
+
+def GetBrowserOrganizationSheetParameter(doc):
+    try:
+        from Autodesk.Revit.DB import BrowserOrganization, ElementId
+
+        org = BrowserOrganization.GetCurrentBrowserOrganizationForSheets(doc)
+        if not org:
+            return None, None
+
+        if (
+            hasattr(org, "FolderFields")
+            and org.FolderFields
+            and org.FolderFields.Size > 0
+        ):
+            first_field = org.FolderFields.Item(0)
+            if hasattr(first_field, "ParameterId") and first_field.ParameterId:
+                param_elem = doc.GetElement(first_field.ParameterId)
+                if param_elem:
+                    return SafeParamElemName(param_elem), None
+            elif (
+                hasattr(first_field, "ParameterElementId")
+                and first_field.ParameterElementId
+            ):
+                param_elem = doc.GetElement(first_field.ParameterElementId)
+                if param_elem:
+                    return SafeParamElemName(param_elem), None
+
+        if (
+            hasattr(org, "FolderParameterId")
+            and org.FolderParameterId
+            and org.FolderParameterId != ElementId.InvalidElementId
+        ):
+            param_elem = doc.GetElement(org.FolderParameterId)
+            if param_elem:
+                return SafeParamElemName(param_elem), None
+
+        sheet = FilteredElementCollector(doc).OfClass(ViewSheet).FirstElement()
+        if not sheet:
+            return None, None
+
+        items = org.GetFolderItems(sheet.Id)
+        if (items is None) or (items.Count == 0):
+            return None, None
+
+        first_item = items[0]
+        param_id = None
+
+        if hasattr(first_item, "GetGroupingParameterIdPath"):
+            path = first_item.GetGroupingParameterIdPath()
+            if path:
+                if hasattr(path, "Count") and path.Count > 0:
+                    param_id = path[0]
+                elif hasattr(path, "Size") and path.Size > 0:
+                    param_id = path.Item(0)
+        elif hasattr(first_item, "ElementId"):
+            param_id = first_item.ElementId
+
+        if param_id and param_id != ElementId.InvalidElementId:
+            param_elem = doc.GetElement(param_id)
+            if param_elem:
+                return SafeParamElemName(param_elem), None
+            if param_id.IntegerValue < 0:
+                bip = System.Enum.ToObject(BuiltInParameter, param_id.IntegerValue)
+                name = LabelUtils.GetLabelFor(bip)
+                return name, None
+
+    except Exception as e:
+        return None, str(e)
+
+    return None, None
 
 
 def DetermineSheetParameterName(doc):
-    param_name = GetBrowserOrganizationSheetParameter(doc)
+    param_name, debug_error = GetBrowserOrganizationSheetParameter(doc)
     if param_name:
-        return param_name
+        return {
+            "name": param_name,
+            "source": "browser_organization_group_by",
+            "debug_error": None,
+        }
 
     priority_params = [
         "ADSK_Штамп Раздел проекта",
         "ADSK_Раздел проекта",
         "Раздел проекта",
-        "Sheet Number",
-        "Номер листа",
     ]
 
     sheets = FilteredElementCollector(doc).OfClass(ViewSheet).ToElements()
@@ -109,9 +185,13 @@ def DetermineSheetParameterName(doc):
                 except:
                     pass
         if len(values) > 0:
-            return param_name
+            return {
+                "name": param_name,
+                "source": "fallback_priority_list",
+                "debug_error": debug_error,
+            }
 
-    return None
+    return {"name": None, "source": "not_found", "debug_error": debug_error}
 
 
 def GetSheetParameter(sheet, param_name):
@@ -136,14 +216,12 @@ def GetElementsFromSchedule(doc, scheduleInstance):
 
         cat_id = GetCategoryFromSchedule(scheduleInstance)
         if cat_id and cat_id.IntegerValue > 0:
-            cat = doc.GetElement(cat_id)
-            if cat:
-                collector = FilteredElementCollector(doc)
-                elements = (
-                    collector.OfCategory(cat.Id.IntegerValue)
-                    .WhereElementIsNotElementType()
-                    .ToElements()
-                )
+            collector = FilteredElementCollector(doc)
+            elements = (
+                collector.OfCategoryId(cat_id)
+                .WhereElementIsNotElementType()
+                .ToElements()
+            )
 
         return elements
     except:
@@ -222,7 +300,10 @@ def FillKitCodes_Schedules(doc, sheet_param_name, progress_callback=None):
     current_schedule = 0
 
     for schedule_inst in schedule_instances:
-        sheet_id = schedule_inst.OwnerSheetId
+        if hasattr(schedule_inst, "OwnerSheetId"):
+            sheet_id = schedule_inst.OwnerSheetId
+        else:
+            sheet_id = schedule_inst.OwnerViewId
         if sheet_id.IntegerValue == -1:
             continue
 
@@ -245,7 +326,10 @@ def FillKitCodes_Schedules(doc, sheet_param_name, progress_callback=None):
             progress = int((current_schedule / total_schedules) * 100)
             progress_callback(progress)
 
-        sheet_id = schedule_inst.OwnerSheetId
+        if hasattr(schedule_inst, "OwnerSheetId"):
+            sheet_id = schedule_inst.OwnerSheetId
+        else:
+            sheet_id = schedule_inst.OwnerViewId
         if sheet_id.IntegerValue == -1:
             current_schedule += 1
             continue
@@ -413,13 +497,23 @@ def FillKitCodes_Views(doc, sheet_param_name, progress_callback=None):
 
 def Execute(doc, progress_callback=None):
     kit_mode = DetermineKitMode(doc)
-    sheet_param_name = DetermineSheetParameterName(doc)
+    sheet_param_info = DetermineSheetParameterName(doc)
+    sheet_param_name = sheet_param_info["name"]
+    param_source = sheet_param_info["source"]
+    debug_error = sheet_param_info.get("debug_error")
 
     if not sheet_param_name:
         return {
             "success": False,
             "message": "Не удалось определить параметр листа для шифра комплекта",
             "parameters": {"added": [], "existing": [], "failed": []},
+            "info": {
+                "doc_title": doc.Title,
+                "kit_mode": kit_mode,
+                "sheet_param_name": sheet_param_name,
+                "param_source": param_source,
+                "debug_error": debug_error,
+            },
             "fill": {
                 "target_param": "ADSK_КомплектШифр",
                 "source_param": sheet_param_name,
@@ -445,15 +539,26 @@ def Execute(doc, progress_callback=None):
 
     try:
         param_result = EnsureParameterExists(doc)
-        
+
         # Проверяем результат добавления параметра
         if not param_result.get("success", False):
             if not param_result.get("parameters", {}).get("existing"):
                 t.RollBack()
                 return {
                     "success": False,
-                    "message": param_result.get("message", "Не удалось добавить параметр"),
-                    "parameters": param_result.get("parameters", {"added": [], "existing": [], "failed": []}),
+                    "message": param_result.get(
+                        "message", "Не удалось добавить параметр"
+                    ),
+                    "parameters": param_result.get(
+                        "parameters", {"added": [], "existing": [], "failed": []}
+                    ),
+                    "info": {
+                        "doc_title": doc.Title,
+                        "kit_mode": kit_mode,
+                        "sheet_param_name": sheet_param_name,
+                        "param_source": param_source,
+                        "debug_error": debug_error,
+                    },
                     "fill": {
                         "target_param": "ADSK_КомплектШифр",
                         "source_param": sheet_param_name,
@@ -467,7 +572,7 @@ def Execute(doc, progress_callback=None):
                         "message": "Не удалось добавить параметр",
                     },
                 }
-        
+
         if kit_mode == "Schedules":
             fill_result = FillKitCodes_Schedules(
                 doc, sheet_param_name, progress_callback
@@ -483,6 +588,13 @@ def Execute(doc, progress_callback=None):
             "message": "Заполнение завершено. Режим: {0}, Параметр листа: {1}".format(
                 kit_mode, sheet_param_name
             ),
+            "info": {
+                "doc_title": doc.Title,
+                "kit_mode": kit_mode,
+                "sheet_param_name": sheet_param_name,
+                "param_source": param_source,
+                "debug_error": debug_error,
+            },
             "fill": {
                 "target_param": "ADSK_КомплектШифр",
                 "source_param": sheet_param_name,
@@ -514,6 +626,13 @@ def Execute(doc, progress_callback=None):
             "success": False,
             "message": "Ошибка: {0}".format(str(e)),
             "parameters": param_result["parameters"],
+            "info": {
+                "doc_title": doc.Title,
+                "kit_mode": kit_mode,
+                "sheet_param_name": sheet_param_name,
+                "param_source": param_source,
+                "debug_error": debug_error,
+            },
             "fill": {
                 "target_param": "ADSK_КомплектШифр",
                 "source_param": sheet_param_name,

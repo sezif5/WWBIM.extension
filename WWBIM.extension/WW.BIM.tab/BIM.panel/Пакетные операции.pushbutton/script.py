@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 import os
 import sys
-import importlib
+import imp
 
 from pyrevit import script, forms
 
@@ -110,6 +110,36 @@ def select_open_documents():
     return [item.doc for item in selected]
 
 
+def _clear_transmission_flag(model_path_str):
+    """Сбрасывает флаг переданного файла (IsTransmitted -> False)."""
+    try:
+        from Autodesk.Revit.DB import ModelPathUtils, TransmissionData
+
+        mp = ModelPathUtils.ConvertUserVisiblePathToModelPath(model_path_str)
+        td = TransmissionData.ReadTransmissionData(mp)
+        if td is None:
+            # ReadTransmissionData вернул None - логируем причину
+            out.print_md(
+                ":warning: [_clear_transmission_flag] ReadTransmissionData returned None for: {}".format(
+                    model_path_str
+                )
+            )
+            return True  # Считаем, что флага нет
+        if td is not None and hasattr(td, "IsTransmitted") and td.IsTransmitted:
+            td.IsTransmitted = False
+            TransmissionData.WriteTransmissionData(mp, td)
+            return True
+        return True  # Флаг уже снят или не был установлен
+    except Exception as e:
+        # Логируем ошибку, а не глушим молча
+        out.print_md(
+            ":warning: [_clear_transmission_flag] Error: {} (path: {})".format(
+                str(e), model_path_str
+            )
+        )
+        return False
+
+
 def read_models_from_txt(file_path):
     """Прочитать список моделей из txt файла."""
     models = []
@@ -207,138 +237,48 @@ def action_open_models(models):
             out.update_progress(i + 1, len(models))
             continue
 
-        try:
-            # Настройки открытия
-            opts = OpenOptions()
-
-            # Получить рабочие наборы для открытия
-            ws_ids = get_worksets_to_open(uiapp, mp)
-            if ws_ids is not None and ws_ids.Count > 0:
-                # Закрыть все, потом открыть нужные
-                ws_config = WorksetConfiguration(
-                    WorksetConfigurationOption.CloseAllWorksets
-                )
-                ws_config.Open(ws_ids)
-                opts.SetOpenWorksetsConfiguration(ws_config)
-            else:
-                # Если не удалось получить РН - открыть все
-                ws_config = WorksetConfiguration(
-                    WorksetConfigurationOption.OpenAllWorksets
-                )
-                opts.SetOpenWorksetsConfiguration(ws_config)
-
-            # Открыть с созданием локальной копии (OpenAndActivateDocument создаёт локальную)
-            uidoc = uiapp.OpenAndActivateDocument(mp, opts, False)
-
-            if uidoc and uidoc.Document:
-                out.print_md(
-                    ":white_check_mark: Открыто: **{}**".format(uidoc.Document.Title)
-                )
-            else:
-                out.print_md(":warning: Документ открыт, но не активирован")
-
-        except Exception as e:
-            out.print_md(":x: Ошибка: `{}`".format(e))
-
-        out.update_progress(i + 1, len(models))
-
-    out.print_md("---")
-    out.print_md("**Готово.**")
-
-
-def select_links_from_txt():
-    """Выбрать связи через txt файлы из папки Objects."""
-    link_files = []
-    try:
-        for f in os.listdir(OBJECTS_DIR):
-            if f.lower().endswith("_links.txt"):
-                link_files.append(f)
-    except OSError:
-        pass
-
-    if not link_files:
-        forms.alert("Не найдены файлы _links.txt в папке Objects", warn_icon=True)
-        return None
-
-    selected_link_file = forms.SelectFromList.show(
-        link_files,
-        title="Выберите файл со списком связей",
-        width=400,
-        button_name="Далее",
-    )
-
-    if not selected_link_file:
-        return None
-
-    link_file_path = os.path.join(OBJECTS_DIR, selected_link_file)
-    links_list = read_models_from_txt(link_file_path)
-    return links_list
-
-
-def get_existing_links(doc):
-    from Autodesk.Revit.DB import RevitLinkInstance
-
-    try:
-        links = list(
-            FilteredElementCollector(doc).OfClass(RevitLinkInstance).ToElements()
-        )
-    except Exception:
-        links = []
-    return links
-
-
-def action_load_family(models):
-    """Загрузить семейство (из открытых)."""
-    families = get_open_families()
-
-    if not families:
-        forms.alert("Нет открытых семейств для загрузки.", warn_icon=True)
-        return
-
-    selected_family = forms.SelectFromList.show(
-        [f.Title for f in families],
-        title="Выберите семейство для загрузки",
-        width=500,
-        button_name="Далее",
-    )
-
-    if not selected_family:
-        return
-
-    family_docs = [f for f in families if f.Title == selected_family]
-
-    out.print_md("## ЗАГРУЗКА СЕМЕЙСТВА")
-    out.print_md("**Семейство:** {}".format(selected_family))
-    out.print_md("**Моделей для загрузки:** {}".format(len(models)))
-    out.print_md("---")
-
-    success_models = 0
-
-    for i, model_path in enumerate(models):
-        model_name = os.path.basename(model_path)
-        out.print_md(":open_file_folder: **{}**".format(model_name))
-
-        mp = to_model_path(model_path)
-        if mp is None:
-            out.print_md(":x: Не удалось преобразовать путь.")
-            out.update_progress(i + 1, len(models))
-            continue
+        dialog_suppressor = None
 
         try:
             result = openbg.open_in_background(
-                __revit__.Application,
                 __revit__,
+                None,
                 mp,
                 audit=False,
                 worksets=("all_except_prefixes", ["00_", "Связь", "Links"]),
                 detach=False,
                 suppress_warnings=True,
+                suppress_dialogs=True,
             )
             if len(result) >= 3:
                 doc = result[0]
                 dialog_suppressor = result[2]
             else:
                 raise Exception("openbg не вернул документ")
+
+            dialog_summary = dialog_suppressor.get_summary()
+            out.print_md(
+                "  dialogs: total={}, suppressed={}, unknown={}, errors={}".format(
+                    dialog_summary.get("total", 0),
+                    dialog_summary.get("suppressed", 0),
+                    dialog_summary.get("unknown", 0),
+                    dialog_summary.get("errors", 0),
+                )
+            )
+            if dialog_summary.get("transmitted_dialog_handled"):
+                out.print_md("  :white_check_mark: transmitted_dialog_handled")
+            if dialog_summary.get("unknown", 0) > 0:
+                unknown = dialog_summary.get("unknown_details", [])[:3]
+                for uid, snippet in unknown:
+                    out.print_md("  unknown_dialog: [{}] {}".format(uid, snippet[:50]))
+
+            out.print_md(
+                "  doc: workshared={}, readonly={}, path={}".format(
+                    doc.IsWorkshared,
+                    doc.IsReadOnly,
+                    os.path.basename(doc.PathName) if doc.PathName else "None",
+                )
+            )
 
             # Загрузить все выбранные семейства
             loaded_count = 0
@@ -377,16 +317,45 @@ def action_load_family(models):
                 t.RollBack()
                 out.print_md(":x: Ошибка загрузки: `{}`".format(e))
 
+            out.print_md(
+                "  before_close: readonly={}, path={}".format(
+                    doc.IsReadOnly,
+                    os.path.basename(doc.PathName) if doc.PathName else "None",
+                )
+            )
+
             # Синхронизация и закрытие
-            closebg.close_with_policy(
+            res = closebg.close_with_policy(
                 doc,
                 do_sync=True,
                 comment="Загрузка семейств",
                 dialog_suppressor=dialog_suppressor,
+                source_path=model_path,
             )
+
+            if not res.get("success"):
+                out.print_md(
+                    ":x: Ошибка закрытия: {}".format(
+                        res.get(
+                            "save_error", res.get("close_error", "Неизвестная ошибка")
+                        )
+                    )
+                )
+                if doc and doc.IsValidObject:
+                    out.print_md(
+                        "  doc_state: readonly={}, path={}".format(
+                            doc.IsReadOnly,
+                            os.path.basename(doc.PathName) if doc.PathName else "None",
+                        )
+                    )
+                if dialog_summary.get("transmitted_dialog_handled"):
+                    out.print_md("  :white_check_mark: transmitted_dialog_handled")
 
         except Exception as e:
             out.print_md(":x: Ошибка открытия: `{}`".format(e))
+        finally:
+            if dialog_suppressor:
+                dialog_suppressor.detach()
 
         out.update_progress(i + 1, len(models))
 
@@ -420,21 +389,48 @@ def action_add_link(models):
             out.update_progress(i + 1, len(models))
             continue
 
+        dialog_suppressor = None
+
         try:
             result = openbg.open_in_background(
-                __revit__.Application,
                 __revit__,
+                None,
                 mp,
                 audit=False,
                 worksets=("all_except_prefixes", ["00_", "Связь", "Links"]),
                 detach=False,
                 suppress_warnings=True,
+                suppress_dialogs=True,
             )
             if len(result) >= 3:
                 doc = result[0]
                 dialog_suppressor = result[2]
             else:
                 raise Exception("openbg не вернул документ")
+
+            dialog_summary = dialog_suppressor.get_summary()
+            out.print_md(
+                "  dialogs: total={}, suppressed={}, unknown={}, errors={}".format(
+                    dialog_summary.get("total", 0),
+                    dialog_summary.get("suppressed", 0),
+                    dialog_summary.get("unknown", 0),
+                    dialog_summary.get("errors", 0),
+                )
+            )
+            if dialog_summary.get("transmitted_dialog_handled"):
+                out.print_md("  :white_check_mark: transmitted_dialog_handled")
+            if dialog_summary.get("unknown", 0) > 0:
+                unknown = dialog_summary.get("unknown_details", [])[:3]
+                for uid, snippet in unknown:
+                    out.print_md("  unknown_dialog: [{}] {}".format(uid, snippet[:50]))
+
+            out.print_md(
+                "  doc: workshared={}, readonly={}, path={}".format(
+                    doc.IsWorkshared,
+                    doc.IsReadOnly,
+                    os.path.basename(doc.PathName) if doc.PathName else "None",
+                )
+            )
 
             # Получить существующие связи
             existing_links = get_existing_links(doc)
@@ -480,16 +476,45 @@ def action_add_link(models):
                 t.RollBack()
                 out.print_md(":x: Ошибка транзакции: `{}`".format(e))
 
+            out.print_md(
+                "  before_close: readonly={}, path={}".format(
+                    doc.IsReadOnly,
+                    os.path.basename(doc.PathName) if doc.PathName else "None",
+                )
+            )
+
             # Синхронизация и закрытие
-            closebg.close_with_policy(
+            res = closebg.close_with_policy(
                 doc,
                 do_sync=True,
                 comment="Добавление связей",
                 dialog_suppressor=dialog_suppressor,
+                source_path=model_path,
             )
+
+            if not res.get("success"):
+                out.print_md(
+                    ":x: Ошибка закрытия: {}".format(
+                        res.get(
+                            "save_error", res.get("close_error", "Неизвестная ошибка")
+                        )
+                    )
+                )
+                if doc and doc.IsValidObject:
+                    out.print_md(
+                        "  doc_state: readonly={}, path={}".format(
+                            doc.IsReadOnly,
+                            os.path.basename(doc.PathName) if doc.PathName else "None",
+                        )
+                    )
+                if dialog_summary.get("transmitted_dialog_handled"):
+                    out.print_md("  :white_check_mark: transmitted_dialog_handled")
 
         except Exception as e:
             out.print_md(":x: Ошибка открытия: `{}`".format(e))
+        finally:
+            if dialog_suppressor:
+                dialog_suppressor.detach()
 
         out.update_progress(i + 1, len(models))
 
@@ -524,43 +549,17 @@ def action_run_python_script_on_opened_docs(docs, scripts):
             for script_rel_path in scripts:
                 script_path = os.path.join(PYTHON_SCRIPTS_DIR, script_rel_path)
                 script_name = os.path.basename(script_rel_path)
-                module_name = os.path.splitext(script_name)[0]
+
+                module_name = (
+                    os.path.splitext(script_rel_path)[0]
+                    .replace("\\", "_")
+                    .replace("/", "_")
+                )
 
                 try:
-                    # Добавляем директорию скрипта в sys.path для импорта
-                    script_dir = os.path.dirname(script_path)
-                    if script_dir not in sys.path:
-                        sys.path.insert(0, script_dir)
+                    sys.modules.pop(module_name, None)
 
-                    # Пытаемся импортировать модуль по имени файла
-                    # ВАЖНО: используем reload чтобы модуль не содержал устаревших ссылок
-                    # на элементы закрытых документов Revit
-                    module = None
-                    try:
-                        # Сначала импортируем, затем перезагружаем для очистки кеша
-                        if module_name in sys.modules:
-                            module = importlib.reload(sys.modules[module_name])
-                        else:
-                            module = importlib.import_module(module_name)
-                    except ImportError as ie:
-                        out.print_md(
-                            "  :x: {} - Ошибка импорта: {}".format(script_name, str(ie))
-                        )
-                        scripts_failed += 1
-                        continue
-                    except Exception as e:
-                        out.print_md(
-                            "  :x: {} - Ошибка загрузки: {}".format(script_name, str(e))
-                        )
-                        scripts_failed += 1
-                        continue
-
-                    if not module:
-                        out.print_md(
-                            "  :x: {} - Модуль не загружен".format(script_name)
-                        )
-                        scripts_failed += 1
-                        continue
+                    module = imp.load_source(module_name, script_path)
 
                     if hasattr(module, "Execute") and callable(module.Execute):
                         result = module.Execute(doc)
@@ -575,6 +574,7 @@ def action_run_python_script_on_opened_docs(docs, scripts):
                         parameters = result.get("parameters", {})
                         fill = result.get("fill", {})
                         diagnostics = result.get("diagnostics", {})
+                        debug_error = (result.get("info") or {}).get("debug_error")
 
                         if success:
                             out.print_md("  :white_check_mark: {}".format(script_name))
@@ -658,6 +658,10 @@ def action_run_python_script_on_opened_docs(docs, scripts):
                             out.print_md("  :x: {}".format(script_name))
                             if message:
                                 out.print_md("  &nbsp;&nbsp;{}".format(message))
+                            if debug_error:
+                                out.print_md(
+                                    "  &nbsp;&nbsp;DEBUG: {}".format(debug_error)
+                                )
                             scripts_failed += 1
                     else:
                         out.print_md("  :white_check_mark: {}".format(script_name))
@@ -666,6 +670,8 @@ def action_run_python_script_on_opened_docs(docs, scripts):
                 except Exception as e:
                     out.print_md("  :x: {} - {}".format(script_name, e))
                     scripts_failed += 1
+                finally:
+                    sys.modules.pop(module_name, None)
 
             if scripts_failed == 0 and scripts_succeeded > 0:
                 success_docs += 1
@@ -692,6 +698,7 @@ def action_run_python_script(models, scripts):
     out.print_md("---")
 
     success_models = 0
+
     for i, model_path in enumerate(models):
         model_name = os.path.basename(model_path)
         out.print_md(":open_file_folder: **{}**".format(model_name))
@@ -702,15 +709,18 @@ def action_run_python_script(models, scripts):
             out.update_progress(i + 1, len(models))
             continue
 
+        dialog_suppressor = None
+
         try:
             result = openbg.open_in_background(
-                __revit__.Application,
                 __revit__,
+                None,
                 mp,
                 audit=False,
                 worksets=("all_except_prefixes", ["00_", "Связь", "Links"]),
                 detach=False,
                 suppress_warnings=True,
+                suppress_dialogs=True,
             )
             if len(result) >= 3:
                 doc = result[0]
@@ -724,49 +734,47 @@ def action_run_python_script(models, scripts):
                 out.update_progress(i + 1, len(models))
                 continue
 
+            dialog_summary = dialog_suppressor.get_summary()
+            out.print_md(
+                "  dialogs: total={}, suppressed={}, unknown={}, errors={}".format(
+                    dialog_summary.get("total", 0),
+                    dialog_summary.get("suppressed", 0),
+                    dialog_summary.get("unknown", 0),
+                    dialog_summary.get("errors", 0),
+                )
+            )
+            if dialog_summary.get("transmitted_dialog_handled"):
+                out.print_md("  :white_check_mark: transmitted_dialog_handled")
+            if dialog_summary.get("unknown", 0) > 0:
+                unknown = dialog_summary.get("unknown_details", [])[:3]
+                for uid, snippet in unknown:
+                    out.print_md("  unknown_dialog: [{}] {}".format(uid, snippet[:50]))
+
+            out.print_md(
+                "  doc: workshared={}, readonly={}, path={}".format(
+                    doc.IsWorkshared,
+                    doc.IsReadOnly,
+                    os.path.basename(doc.PathName) if doc.PathName else "None",
+                )
+            )
+
             scripts_succeeded = 0
             scripts_failed = 0
 
             for script_rel_path in scripts:
                 script_path = os.path.join(PYTHON_SCRIPTS_DIR, script_rel_path)
                 script_name = os.path.basename(script_rel_path)
-                module_name = os.path.splitext(script_name)[0]
+
+                module_name = (
+                    os.path.splitext(script_rel_path)[0]
+                    .replace("\\", "_")
+                    .replace("/", "_")
+                )
 
                 try:
-                    # Добавляем директорию скрипта в sys.path для импорта
-                    script_dir = os.path.dirname(script_path)
-                    if script_dir not in sys.path:
-                        sys.path.insert(0, script_dir)
+                    sys.modules.pop(module_name, None)
 
-                    # Пытаемся импортировать модуль по имени файла
-                    # ВАЖНО: используем reload чтобы модуль не содержал устаревших ссылок
-                    # на элементы закрытых документов Revit
-                    module = None
-                    try:
-                        # Сначала импортируем, затем перезагружаем для очистки кеша
-                        if module_name in sys.modules:
-                            module = importlib.reload(sys.modules[module_name])
-                        else:
-                            module = importlib.import_module(module_name)
-                    except ImportError as ie:
-                        out.print_md(
-                            "  :x: {} - Ошибка импорта: {}".format(script_name, str(ie))
-                        )
-                        scripts_failed += 1
-                        continue
-                    except Exception as e:
-                        out.print_md(
-                            "  :x: {} - Ошибка загрузки: {}".format(script_name, str(e))
-                        )
-                        scripts_failed += 1
-                        continue
-
-                    if not module:
-                        out.print_md(
-                            "  :x: {} - Модуль не загружен".format(script_name)
-                        )
-                        scripts_failed += 1
-                        continue
+                    module = imp.load_source(module_name, script_path)
 
                     if hasattr(module, "Execute") and callable(module.Execute):
                         result = module.Execute(doc)
@@ -781,106 +789,108 @@ def action_run_python_script(models, scripts):
                         parameters = result.get("parameters", {})
                         fill = result.get("fill", {})
                         diagnostics = result.get("diagnostics", {})
+                        debug_error = (result.get("info") or {}).get("debug_error")
 
                         if success:
                             confirmed = diagnostics.get("bound_after_operation", None)
+                            show_warning = (
+                                "bound_after_operation" in diagnostics and not confirmed
+                            )
 
-                            if confirmed is True:
-                                out.print_md(
-                                    "  :white_check_mark: {}".format(script_name)
-                                )
-
-                                if message:
-                                    out.print_md("  &nbsp;&nbsp;{}".format(message))
-
-                                if parameters:
-                                    added = len(parameters.get("added", []))
-                                    existing = len(parameters.get("existing", []))
-                                    failed = len(parameters.get("failed", []))
-                                    if added > 0 or existing > 0 or failed > 0:
-                                        out.print_md(
-                                            "  &nbsp;&nbsp;Параметры: добавлено {}, существует {}, ошибок {}".format(
-                                                added, existing, failed
-                                            )
-                                        )
-
-                                if fill:
-                                    target_param = fill.get("target_param", "")
-                                    filled = fill.get("filled", False)
-                                    planned_value = fill.get("planned_value", None)
-                                    total = fill.get("total", 0)
-                                    updated = fill.get("updated_count", 0)
-                                    skipped = fill.get("skipped_count", 0)
-                                    skip_reasons = fill.get("skip_reasons", {})
-                                    values = fill.get("values", [])
-                                    fill_message = fill.get("message", "")
-
-                                    if target_param:
-                                        out.print_md(
-                                            "  &nbsp;&nbsp;Целевой параметр: {}".format(
-                                                target_param
-                                            )
-                                        )
-
-                                    if total > 0:
-                                        out.print_md(
-                                            "  &nbsp;&nbsp;Элементы: всего {}, обновлено {}, пропущено {}".format(
-                                                total, updated, skipped
-                                            )
-                                        )
-
-                                    if planned_value:
-                                        out.print_md(
-                                            "  &nbsp;&nbsp;Запланировано: {}".format(
-                                                planned_value
-                                            )
-                                        )
-
-                                    if skip_reasons:
-                                        reasons_str = ", ".join(
-                                            [
-                                                "{}={}".format(k, v)
-                                                for k, v in skip_reasons.items()
-                                                if v > 0
-                                            ]
-                                        )
-                                        if reasons_str:
-                                            out.print_md(
-                                                "  &nbsp;&nbsp;Причины пропуска: {}".format(
-                                                    reasons_str
-                                                )
-                                            )
-
-                                    if values:
-                                        values_str = ", ".join(str(v) for v in values)
-                                        if len(values_str) > 100:
-                                            values_str = values_str[:97] + "..."
-                                        out.print_md(
-                                            "  &nbsp;&nbsp;Значения: {}".format(
-                                                values_str
-                                            )
-                                        )
-
-                                    if fill_message:
-                                        out.print_md(
-                                            "  &nbsp;&nbsp;{}".format(fill_message)
-                                        )
-
-                            else:
+                            if show_warning:
                                 out.print_md(
                                     "  :white_check_mark: {} - :warning: Операция не подтверждена".format(
                                         script_name
                                     )
                                 )
+                            else:
+                                out.print_md(
+                                    "  :white_check_mark: {}".format(script_name)
+                                )
 
-                                if message:
-                                    out.print_md("  &nbsp;&nbsp;{}".format(message))
+                            if message:
+                                out.print_md("  &nbsp;&nbsp;{}".format(message))
+
+                            if parameters:
+                                added = len(parameters.get("added", []))
+                                existing = len(parameters.get("existing", []))
+                                failed = len(parameters.get("failed", []))
+                                if added > 0 or existing > 0 or failed > 0:
+                                    out.print_md(
+                                        "  &nbsp;&nbsp;Параметры: добавлено {}, существует {}, ошибок {}".format(
+                                            added, existing, failed
+                                        )
+                                    )
+
+                            if fill:
+                                target_param = fill.get("target_param", "")
+                                filled = fill.get("filled", False)
+                                planned_value = fill.get("planned_value", None)
+                                total = fill.get("total", 0)
+                                updated = fill.get("updated_count", 0)
+                                skipped = fill.get("skipped_count", 0)
+                                skip_reasons = fill.get("skip_reasons", {})
+                                values = fill.get("values", [])
+                                fill_message = fill.get("message", "")
+
+                                if target_param:
+                                    out.print_md(
+                                        "  &nbsp;&nbsp;Целевой параметр: {}".format(
+                                            target_param
+                                        )
+                                    )
+
+                                if total > 0:
+                                    out.print_md(
+                                        "  &nbsp;&nbsp;Элементы: всего {}, обновлено {}, пропущено {}".format(
+                                            total, updated, skipped
+                                        )
+                                    )
+
+                                if planned_value:
+                                    out.print_md(
+                                        "  &nbsp;&nbsp;Запланировано: {}".format(
+                                            planned_value
+                                        )
+                                    )
+
+                                if skip_reasons:
+                                    reasons_str = ", ".join(
+                                        [
+                                            "{}={}".format(k, v)
+                                            for k, v in skip_reasons.items()
+                                            if v > 0
+                                        ]
+                                    )
+                                    if reasons_str:
+                                        out.print_md(
+                                            "  &nbsp;&nbsp;Причины пропуска: {}".format(
+                                                reasons_str
+                                            )
+                                        )
+
+                                if values:
+                                    values_str = ", ".join(str(v) for v in values)
+                                    if len(values_str) > 100:
+                                        values_str = values_str[:97] + "..."
+                                    out.print_md(
+                                        "  &nbsp;&nbsp;Значения: {}".format(values_str)
+                                    )
+
+                                if fill_message:
+                                    out.print_md(
+                                        "  &nbsp;&nbsp;{}".format(fill_message)
+                                    )
 
                             scripts_succeeded += 1
                         else:
                             out.print_md("  :x: {}".format(script_name))
                             if message:
                                 out.print_md("  &nbsp;&nbsp;{}".format(message))
+                            if debug_error:
+                                out.print_md(
+                                    "  &nbsp;&nbsp;DEBUG: {}".format(debug_error)
+                                )
                             scripts_failed += 1
                     else:
                         out.print_md("  :white_check_mark: {}".format(script_name))
@@ -889,20 +899,51 @@ def action_run_python_script(models, scripts):
                 except Exception as e:
                     out.print_md("  :x: {} - {}".format(script_name, e))
                     scripts_failed += 1
+                finally:
+                    sys.modules.pop(module_name, None)
+
+            out.print_md(
+                "  before_close: readonly={}, path={}".format(
+                    doc.IsReadOnly,
+                    os.path.basename(doc.PathName) if doc.PathName else "None",
+                )
+            )
 
             # Закрываем документ ОДИН РАЗ после всех скриптов
-            closebg.close_with_policy(
+            res = closebg.close_with_policy(
                 doc,
                 do_sync=True,
                 comment="Выполнение python скриптов",
                 dialog_suppressor=dialog_suppressor,
+                source_path=model_path,
             )
+
+            if not res.get("success"):
+                out.print_md(
+                    ":x: Ошибка закрытия: {}".format(
+                        res.get(
+                            "save_error", res.get("close_error", "Неизвестная ошибка")
+                        )
+                    )
+                )
+                if doc and doc.IsValidObject:
+                    out.print_md(
+                        "  doc_state: readonly={}, path={}".format(
+                            doc.IsReadOnly,
+                            os.path.basename(doc.PathName) if doc.PathName else "None",
+                        )
+                    )
+                if dialog_summary.get("transmitted_dialog_handled"):
+                    out.print_md("  :white_check_mark: transmitted_dialog_handled")
 
             if scripts_failed == 0:
                 success_models += 1
 
         except Exception as e:
             out.print_md(":x: Ошибка открытия: `{}`".format(e))
+        finally:
+            if dialog_suppressor:
+                dialog_suppressor.detach()
 
         out.update_progress(i + 1, len(models))
 

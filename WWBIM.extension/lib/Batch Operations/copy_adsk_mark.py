@@ -19,37 +19,8 @@ from Autodesk.Revit.DB import (
     BuiltInCategory,
     Transaction,
     StorageType,
+    ElementId,
 )
-
-from add_shared_parameter import AddSharedParameterToDoc
-from model_categories import MODEL_CATEGORIES
-
-
-CONFIG = {
-    "PARAMETER_NAME": "ADSK_Марка",
-    "BINDING_TYPE": "Instance",
-    "PARAMETER_GROUP": "PG_IDENTITY_DATA",
-}
-
-
-def EnsureParameterExists(doc):
-    from Autodesk.Revit.DB import BuiltInParameterGroup
-
-    param_config = {
-        "PARAMETER_NAME": CONFIG["PARAMETER_NAME"],
-        "BINDING_TYPE": CONFIG["BINDING_TYPE"],
-        "PARAMETER_GROUP": BuiltInParameterGroup.PG_IDENTITY_DATA,
-        "CATEGORIES": MODEL_CATEGORIES,
-    }
-
-    try:
-        return AddSharedParameterToDoc(doc, param_config)
-    except Exception as e:
-        return {
-            "success": False,
-            "parameters": {"added": [], "existing": [], "failed": []},
-            "message": "Ошибка при проверке параметра: {0}".format(str(e)),
-        }
 
 
 def GetEngineeringCategories():
@@ -83,29 +54,39 @@ def GetCategoryElements(doc, category):
         return []
 
 
-def GetMarkParameterValue(element):
+def GetMarkParameterValue(element, doc):
     param = element.LookupParameter("ADSK_Марка")
     if param and param.StorageType == StorageType.String and param.HasValue:
-        return param.AsString()
-    return None
+        value = param.AsString()
+        if value and value.strip():
+            return value, "instance"
+
+    type_id = element.GetTypeId()
+    if type_id and type_id != ElementId.InvalidElementId:
+        type_elem = doc.GetElement(type_id)
+        if type_elem:
+            param = type_elem.LookupParameter("ADSK_Марка")
+            if param and param.StorageType == StorageType.String and param.HasValue:
+                value = param.AsString()
+                if value and value.strip():
+                    return value, "type"
+
+    return None, None
 
 
 def SetSystemMarkParameter(element, value):
     try:
         param = element.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)
         if not param:
-            return {"status": "parameter_not_found", "reason": "parameter_not_found"}
-
-        if param.StorageType != StorageType.String:
-            return {"status": "wrong_storage_type", "reason": "wrong_storage_type"}
+            return {"status": "skipped", "reason": "target_missing"}
 
         if param.IsReadOnly:
-            return {"status": "readonly", "reason": "readonly"}
+            return {"status": "skipped", "reason": "target_readonly"}
 
         try:
             current_value = param.AsString()
             if current_value == value:
-                return {"status": "already_ok", "reason": "already_ok"}
+                return {"status": "skipped", "reason": "already_ok"}
         except:
             pass
 
@@ -113,9 +94,9 @@ def SetSystemMarkParameter(element, value):
             param.Set(value)
             return {"status": "updated", "reason": None}
 
-        return {"status": "exception", "reason": "value_is_none"}
+        return {"status": "skipped", "reason": "value_is_none"}
     except Exception as e:
-        return {"status": "exception", "reason": "exception"}
+        return {"status": "skipped", "reason": "exception"}
 
 
 def FillMarkParameter(doc, progress_callback=None):
@@ -124,12 +105,15 @@ def FillMarkParameter(doc, progress_callback=None):
     updated_count = 0
     skipped_count = 0
     skip_reasons = {
-        "parameter_not_found": 0,
-        "readonly": 0,
-        "wrong_storage_type": 0,
+        "source_missing": 0,
+        "source_wrong_type": 0,
+        "target_missing": 0,
+        "target_readonly": 0,
         "already_ok": 0,
         "exception": 0,
     }
+    source_from_instance_count = 0
+    source_from_type_count = 0
     all_values = set()
 
     for category in categories:
@@ -143,6 +127,8 @@ def FillMarkParameter(doc, progress_callback=None):
             "updated_count": 0,
             "skipped_count": 0,
             "skip_reasons": {},
+            "source_from_instance_count": 0,
+            "source_from_type_count": 0,
             "values": [],
             "filled": False,
         }
@@ -157,9 +143,14 @@ def FillMarkParameter(doc, progress_callback=None):
                 progress = int((current_index / total) * 100)
                 progress_callback(progress)
 
-            mark_value = GetMarkParameterValue(element)
+            mark_value, source_type = GetMarkParameterValue(element, doc)
             if mark_value is not None:
                 all_values.add(mark_value)
+                if source_type == "instance":
+                    source_from_instance_count += 1
+                elif source_type == "type":
+                    source_from_type_count += 1
+
                 result = SetSystemMarkParameter(element, mark_value)
                 if result["status"] == "updated":
                     updated_count += 1
@@ -170,6 +161,7 @@ def FillMarkParameter(doc, progress_callback=None):
                         skip_reasons[reason] += 1
             else:
                 skipped_count += 1
+                skip_reasons["source_missing"] += 1
 
             current_index += 1
 
@@ -183,6 +175,9 @@ def FillMarkParameter(doc, progress_callback=None):
     )
     if reasons_str:
         message += "; reasons: " + reasons_str
+    message += "; source: instance={0}, type={1}".format(
+        source_from_instance_count, source_from_type_count
+    )
 
     return {
         "planned_value": sorted(list(all_values)),
@@ -190,6 +185,8 @@ def FillMarkParameter(doc, progress_callback=None):
         "updated_count": updated_count,
         "skipped_count": skipped_count,
         "skip_reasons": skip_reasons,
+        "source_from_instance_count": source_from_instance_count,
+        "source_from_type_count": source_from_type_count,
         "values": sorted(list(all_values)),
         "filled": filled,
         "message": message,
@@ -201,37 +198,12 @@ def Execute(doc, progress_callback=None):
     t.Start()
 
     try:
-        param_result = EnsureParameterExists(doc)
-        
-        # Проверяем результат добавления параметра
-        if not param_result.get("success", False):
-            if not param_result.get("parameters", {}).get("existing"):
-                t.RollBack()
-                return {
-                    "success": False,
-                    "message": param_result.get("message", "Не удалось добавить параметр"),
-                    "parameters": param_result.get("parameters", {"added": [], "existing": [], "failed": []}),
-                    "fill": {
-                        "target_param": "Марка",
-                        "source_param": "ADSK_Марка",
-                        "filled": False,
-                        "planned_value": None,
-                        "total": 0,
-                        "updated_count": 0,
-                        "skipped_count": 0,
-                        "skip_reasons": {},
-                        "values": [],
-                    },
-                }
-        
         fill_result = FillMarkParameter(doc, progress_callback)
 
         t.Commit()
 
         result = {
             "success": True,
-            "parameters": param_result["parameters"],
-            "message": param_result["message"],
             "fill": {
                 "target_param": "Марка",
                 "source_param": "ADSK_Марка",
@@ -241,6 +213,8 @@ def Execute(doc, progress_callback=None):
                 "updated_count": fill_result["updated_count"],
                 "skipped_count": fill_result["skipped_count"],
                 "skip_reasons": fill_result["skip_reasons"],
+                "source_from_instance_count": fill_result["source_from_instance_count"],
+                "source_from_type_count": fill_result["source_from_type_count"],
                 "values": fill_result["values"],
                 "message": fill_result["message"],
             },
@@ -262,7 +236,6 @@ def Execute(doc, progress_callback=None):
         return {
             "success": False,
             "message": "Ошибка: {0}".format(str(e)),
-            "parameters": {"added": [], "existing": [], "failed": []},
             "fill": {
                 "target_param": "Марка",
                 "source_param": "ADSK_Марка",
@@ -272,6 +245,8 @@ def Execute(doc, progress_callback=None):
                 "updated_count": 0,
                 "skipped_count": 0,
                 "skip_reasons": {},
+                "source_from_instance_count": 0,
+                "source_from_type_count": 0,
                 "values": [],
             },
         }
