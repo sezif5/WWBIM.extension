@@ -28,6 +28,9 @@ from Autodesk.Revit.DB import (
     ImportInstance,
     BuiltInCategory,
     ElementId,
+    View,
+    ViewSheet,
+    ViewSchedule,
 )
 
 # ваши модули
@@ -413,6 +416,58 @@ def delete_raster_images(doc):
     return deleted
 
 
+# ---------------- удаление видов и листов ----------------
+def delete_views_and_sheets(doc):
+    """
+    Удаляет все виды и листы, кроме:
+    - Нависовских видов (содержащих 'Navisworks' в имени)
+    - Шаблонов видов (IsTemplate)
+    - Спецификаций (ViewSchedule)
+    """
+    deleted = 0
+    ids_to_delete = []
+
+    try:
+        all_views = FilteredElementCollector(doc).OfClass(View).ToElements()
+
+        for view in all_views:
+            if view.IsTemplate:
+                continue
+
+            if isinstance(view, ViewSchedule):
+                continue
+
+            view_name = view.Name or ""
+            if "navisworks" in view_name.lower():
+                continue
+
+            ids_to_delete.append(view.Id)
+
+        all_sheets = FilteredElementCollector(doc).OfClass(ViewSheet).ToElements()
+        for sheet in all_sheets:
+            ids_to_delete.append(sheet.Id)
+
+        if not ids_to_delete:
+            return 0
+
+        t = Transaction(doc, "Delete Views and Sheets")
+        t.Start()
+        try:
+            for eid in ids_to_delete:
+                try:
+                    doc.Delete(eid)
+                    deleted += 1
+                except:
+                    pass
+            t.Commit()
+        except:
+            t.RollBack()
+    except Exception as e:
+        out.print_md("  :warning: Ошибка удаления видов и листов: {}".format(e))
+
+    return deleted
+
+
 # ---------------- удаление 2D-подложек (устаревшая, для совместимости) ----------------
 def delete_2d_underlays(doc, settings=None):
     """
@@ -485,6 +540,7 @@ def select_cleanup_options():
         CleanupOption("Удалять CAD связи", "cad_links", True),
         CleanupOption("Удалять растровые изображения", "raster_images", True),
         CleanupOption("Очищать неиспользуемые элементы (Purge)", "purge_unused", True),
+        CleanupOption("Удалить все виды и листы", "delete_views_sheets", False),
     ]
 
     selected = forms.SelectFromList.show(
@@ -691,6 +747,8 @@ def main():
         cleanup_info.append("Растровые изображения")
     if cleanup_settings.get("purge_unused"):
         cleanup_info.append("Purge Unused")
+    if cleanup_settings.get("delete_views_sheets"):
+        cleanup_info.append("Виды и листы")
 
     if cleanup_info:
         out.print_md("Очистка: **{}**".format(", ".join(cleanup_info)))
@@ -798,6 +856,19 @@ def main():
                     )
             except Exception as e:
                 out.print_md("  :warning: Ошибка очистки: {}".format(e))
+
+        # Удаление видов и листов
+        if cleanup_settings.get("delete_views_sheets"):
+            try:
+                views_deleted = delete_views_and_sheets(doc)
+                if views_deleted > 0:
+                    out.print_md(
+                        "  :page_facing_up: Удалено видов и листов: **{}**".format(
+                            views_deleted
+                        )
+                    )
+            except Exception as e:
+                out.print_md("  :warning: Ошибка удаления видов и листов: {}".format(e))
 
         # Сохранение
         t_save = coreutils.Timer()

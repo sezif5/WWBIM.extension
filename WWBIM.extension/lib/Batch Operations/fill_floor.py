@@ -265,6 +265,13 @@ def ParseLevelName(level_name):
         floor_num = match.group(1)
         return str(int(floor_num))
 
+    pattern = r"^(-?\d+)_[+-]?\d+[.,]\d+"
+    match = re.search(pattern, level_name)
+
+    if match:
+        floor_num = match.group(1)
+        return str(int(floor_num))
+
     return level_name
 
 
@@ -299,7 +306,35 @@ def DetermineFloorForElement(element, levels_sorted, offset_mm=100):
 
     floor_value = ParseLevelName(closest_level.Name)
 
-    return floor_value, None
+    def is_floor_number(value):
+        if value is None:
+            return False
+        try:
+            int(value)
+            return True
+        except (ValueError, TypeError):
+            return False
+
+    if is_floor_number(floor_value):
+        return floor_value, None
+
+    closest_idx = levels.index(closest_level)
+
+    for offset in range(-1, -len(levels) - 1, -1):
+        idx = closest_idx + offset
+        if idx >= 0:
+            candidate_floor = ParseLevelName(levels[idx].Name)
+            if is_floor_number(candidate_floor):
+                return candidate_floor, None
+
+    for offset in range(1, len(levels) - closest_idx):
+        idx = closest_idx + offset
+        if idx < len(levels):
+            candidate_floor = ParseLevelName(levels[idx].Name)
+            if is_floor_number(candidate_floor):
+                return candidate_floor, None
+
+    return None, "floor_not_found"
 
 
 def FillFloorParameter(doc, progress_callback=None):
@@ -321,6 +356,7 @@ def FillFloorParameter(doc, progress_callback=None):
         "no_elevation": 0,
         "exception": 0,
         "cad_import": 0,
+        "floor_not_found": 0,
     }
     all_values = set()
     offset_mm = CONFIG["DEFAULT_OFFSET_MM"]

@@ -217,6 +217,13 @@ def _qty_is_zero_or_missing(qty_text):  # <<< добавлено
     return False
 # --- конец нового блока
 
+
+def _is_unspecified_value(text):
+    if not text:
+        return False
+    s = text.strip().lower()
+    return (u"неспецифиц" in s) or (u"unspecified" in s)
+
 def _compose_description(elem):
     name = _get_param_text(elem, P_NAME)
     if name and u"!Не учитывать" in name:
@@ -247,12 +254,17 @@ def _compose_description(elem):
         n_name = _get_param_text(sub, P_NAME)
         if n_name and u"!Не учитывать" in n_name:
             continue
+        if _is_unspecified_value(n_name):
+            continue
         n_qty = _get_param_text(sub, P_QTY)
         if n_qty and n_qty.strip() != u"1":
             continue
         n_code = _get_param_text(sub, P_CODE)
         n_mfr  = _get_param_text(sub, P_MFR)
         n_mark = _get_param_text(sub, P_MARK)
+
+        if _is_unspecified_value(n_code) or _is_unspecified_value(n_mfr) or _is_unspecified_value(n_mark):
+            continue
 
         n_desc_parts = [n_name, n_code, n_mark, n_mfr]
 

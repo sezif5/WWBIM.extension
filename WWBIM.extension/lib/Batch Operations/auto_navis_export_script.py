@@ -814,6 +814,87 @@ def export_view_to_nwc(doc, view, target_folder, file_wo_ext):
     return api_ok, out_path
 
 
+def export_view_to_nwc_safe_replace(doc, view, target_nwc_path):
+    r"""Безопасный экспорт: сначала во временный файл, затем атомарная замена target."""
+    if not target_nwc_path:
+        return False, None, "Target NWC path is empty"
+
+    target_folder = os.path.dirname(target_nwc_path)
+    target_name_wo_ext = os.path.splitext(os.path.basename(target_nwc_path))[0]
+
+    if not target_folder:
+        return False, target_nwc_path, "Target folder is empty"
+
+    temp_name_wo_ext = "{}_tmp_{}".format(
+        target_name_wo_ext, datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    )
+    temp_nwc_path = os.path.join(target_folder, temp_name_wo_ext + ".nwc")
+    backup_nwc_path = target_nwc_path + ".bak_export"
+
+    # Очистка возможных артефактов предыдущих сбоев
+    for stale_path in (temp_nwc_path, backup_nwc_path):
+        if os.path.exists(stale_path):
+            try:
+                os.remove(stale_path)
+                log("    Removed stale file: {}".format(stale_path))
+            except Exception as e:
+                log("    WARNING: Cannot remove stale file {}: {}".format(stale_path, e))
+
+    log("    Safe export: temporary file {}".format(temp_nwc_path))
+    api_ok, exported_path = export_view_to_nwc(doc, view, target_folder, temp_name_wo_ext)
+
+    temp_ok = os.path.exists(temp_nwc_path) and (os.path.getsize(temp_nwc_path) > 0)
+    if not temp_ok:
+        if os.path.exists(temp_nwc_path):
+            try:
+                os.remove(temp_nwc_path)
+            except Exception:
+                pass
+        return False, target_nwc_path, "Temporary NWC was not created or is empty"
+
+    backup_created = False
+    try:
+        if os.path.exists(target_nwc_path):
+            os.replace(target_nwc_path, backup_nwc_path)
+            backup_created = True
+            log("    Existing NWC moved to backup: {}".format(backup_nwc_path))
+
+        os.replace(temp_nwc_path, target_nwc_path)
+        log("    New NWC atomically moved to target: {}".format(target_nwc_path))
+
+        if backup_created and os.path.exists(backup_nwc_path):
+            try:
+                os.remove(backup_nwc_path)
+                log("    Backup removed after successful replace")
+            except Exception as e:
+                log("    WARNING: Cannot remove backup file: {}".format(e))
+
+        # Учитываем кейс, когда API вернул False, но файл успешно создан и заменен
+        if (not api_ok) and exported_path:
+            log("    WARNING: API returned False, but safe replace succeeded")
+
+        return True, target_nwc_path, None
+    except Exception as e:
+        log("    ERROR: Safe replace failed: {}".format(e))
+
+        # Попытка восстановления старого файла
+        if backup_created and os.path.exists(backup_nwc_path):
+            try:
+                os.replace(backup_nwc_path, target_nwc_path)
+                log("    Old NWC restored from backup")
+            except Exception as restore_ex:
+                log("    CRITICAL: Cannot restore old NWC from backup: {}".format(restore_ex))
+
+        # Удаляем временный файл, если остался
+        if os.path.exists(temp_nwc_path):
+            try:
+                os.remove(temp_nwc_path)
+            except Exception:
+                pass
+
+        return False, target_nwc_path, "Safe replace failed: {}".format(e)
+
+
 # ---------- main ----------
 
 
@@ -955,26 +1036,19 @@ def main():
 
         log("  Target NWC: {}".format(out_file_expected))
 
-        # Удаление существующего NWC файла (как в C#)
-        if os.path.exists(out_file_expected):
-            try:
-                os.remove(out_file_expected)
-                log("  Deleted existing file")
-            except Exception as e:
-                log("  WARNING: Cannot delete existing file: {}".format(e))
-
         # Пункт 3: Проверка геометрии перед экспортом
         has_geo = has_exportable_geometry(doc, view)
 
         try:
             if has_geo:
                 log("  Starting export to: {}".format(dest_folder))
-                nwc_file_wo_ext = os.path.splitext(os.path.basename(out_file_expected))[
-                    0
-                ]
-                api_ok, out_path = export_view_to_nwc(
-                    doc, view, dest_folder, nwc_file_wo_ext
+                safe_ok, safe_path, safe_error = export_view_to_nwc_safe_replace(
+                    doc, view, out_file_expected
                 )
+                api_ok = safe_ok
+                out_path = safe_path
+                if safe_error:
+                    err_text = safe_error
             else:
                 skip_reason = "View has no exportable geometry"
                 log("  SKIP: {}".format(skip_reason))

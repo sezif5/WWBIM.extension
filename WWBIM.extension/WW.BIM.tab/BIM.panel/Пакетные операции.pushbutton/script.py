@@ -65,7 +65,8 @@ def list_txt_files(folder_path):
 def get_open_documents():
     """Получить список открытых документов Revit (кроме семей)."""
     docs = []
-    app = __revit__
+    ui = __revit__
+    app = getattr(ui, "Application", ui)
     for doc in app.Documents:
         try:
             if not doc.IsFamilyDocument:
@@ -216,6 +217,64 @@ def get_worksets_to_open(uiapp, mp):
     return ids_to_open
 
 
+def get_workset_status(doc):
+    """Получает информацию о статусе рабочих наборов в открытом документе.
+
+    Args:
+        doc: открытый документ Revit
+
+    Returns:
+        dict: {
+            'total': int - общее количество пользовательских РН,
+            'open_count': int - количество открытых РН,
+            'closed_count': int - количество закрытых РН,
+            'open_names': list[str] - имена открытых РН,
+            'closed_names': list[str] - имена закрытых РН,
+            'active_workset': str - имя активного РН
+        } или None если не workshared документ
+    """
+    if not doc.IsWorkshared:
+        return None
+
+    try:
+        from Autodesk.Revit.DB import (
+            WorksetKind,
+            FilteredWorksetCollector,
+            WorksharingPicklistOption,
+        )
+
+        workset_table = doc.GetWorksetTable()
+
+        active_ws_id = workset_table.GetActiveWorksetId()
+        active_ws = workset_table.GetWorkset(active_ws_id) if active_ws_id else None
+        active_ws_name = active_ws.Name if active_ws else "None"
+
+        open_names = []
+        closed_names = []
+
+        collector = FilteredWorksetCollector(doc)
+        worksets = collector.ToWorksets()
+
+        for ws in worksets:
+            if ws.Kind == WorksetKind.UserWorkset:
+                is_open = workset_table.IsWorksetOpen(ws.Id)
+                if is_open:
+                    open_names.append(ws.Name)
+                else:
+                    closed_names.append(ws.Name)
+
+        return {
+            "total": len(open_names) + len(closed_names),
+            "open_count": len(open_names),
+            "closed_count": len(closed_names),
+            "open_names": sorted(open_names),
+            "closed_names": sorted(closed_names),
+            "active_workset": active_ws_name,
+        }
+    except Exception as e:
+        return None
+
+
 def action_open_models(models):
     """Открыть выбранные модели с созданием локальной копии."""
     from Autodesk.Revit.DB import OpenOptions
@@ -280,6 +339,26 @@ def action_open_models(models):
                 )
             )
 
+            if doc.IsWorkshared:
+                ws_status = get_workset_status(doc)
+                if ws_status:
+                    out.print_md(
+                        "  worksets: total={}, open={}, closed={}".format(
+                            ws_status["total"],
+                            ws_status["open_count"],
+                            ws_status["closed_count"],
+                        )
+                    )
+                    out.print_md(
+                        "  active_workset: {}".format(ws_status["active_workset"])
+                    )
+                    if ws_status["open_names"]:
+                        open_str = ", ".join(ws_status["open_names"])
+                        out.print_md("  open_worksets: {}".format(open_str))
+                    if ws_status["closed_names"]:
+                        closed_str = ", ".join(ws_status["closed_names"])
+                        out.print_md("  closed_worksets: {}".format(closed_str))
+
             # Загрузить все выбранные семейства
             loaded_count = 0
             from Autodesk.Revit.DB import Transaction
@@ -316,6 +395,41 @@ def action_open_models(models):
             except Exception as e:
                 t.RollBack()
                 out.print_md(":x: Ошибка загрузки: `{}`".format(e))
+
+            # Выводим информацию о диалогах после операции
+            dialog_summary_after = dialog_suppressor.get_summary()
+            suppressed_brief = dialog_summary_after.get("suppressed_dialogs_brief", [])
+            if suppressed_brief:
+                out.print_md("  suppressed_dialogs: {}".format(len(suppressed_brief)))
+                for d in suppressed_brief:
+                    out.print_md("    - DialogId: {}".format(d.get("dialog_id", "")))
+                    out.print_md("      Type: {}".format(d.get("type", "")))
+                    out.print_md("      TypeFull: {}".format(d.get("type_full", "")))
+                    out.print_md("      Title: {}".format(d.get("title", "")))
+                    out.print_md(
+                        "      MainInstruction: {}".format(
+                            d.get("main_instruction", "")
+                        )
+                    )
+                    out.print_md("      Message: {}".format(d.get("message", "")))
+                    out.print_md(
+                        "      ExpandedContent: {}".format(
+                            d.get("expanded_content", "")
+                        )
+                    )
+                    all_props = d.get("all_string_props", {})
+                    if all_props:
+                        out.print_md("      AllStringProps:")
+                        for prop_name, prop_value in all_props.items():
+                            out.print_md(
+                                "        - {}: {}".format(
+                                    prop_name,
+                                    prop_value[:100]
+                                    if len(str(prop_value)) > 100
+                                    else prop_value,
+                                )
+                            )
+                    out.print_md("      Action: {}".format(d.get("action", "")))
 
             out.print_md(
                 "  before_close: readonly={}, path={}".format(
@@ -432,6 +546,26 @@ def action_add_link(models):
                 )
             )
 
+            if doc.IsWorkshared:
+                ws_status = get_workset_status(doc)
+                if ws_status:
+                    out.print_md(
+                        "  worksets: total={}, open={}, closed={}".format(
+                            ws_status["total"],
+                            ws_status["open_count"],
+                            ws_status["closed_count"],
+                        )
+                    )
+                    out.print_md(
+                        "  active_workset: {}".format(ws_status["active_workset"])
+                    )
+                    if ws_status["open_names"]:
+                        open_str = ", ".join(ws_status["open_names"])
+                        out.print_md("  open_worksets: {}".format(open_str))
+                    if ws_status["closed_names"]:
+                        closed_str = ", ".join(ws_status["closed_names"])
+                        out.print_md("  closed_worksets: {}".format(closed_str))
+
             # Получить существующие связи
             existing_links = get_existing_links(doc)
 
@@ -475,6 +609,41 @@ def action_add_link(models):
             except Exception as e:
                 t.RollBack()
                 out.print_md(":x: Ошибка транзакции: `{}`".format(e))
+
+            # Выводим информацию о диалогах после операции
+            dialog_summary_after = dialog_suppressor.get_summary()
+            suppressed_brief = dialog_summary_after.get("suppressed_dialogs_brief", [])
+            if suppressed_brief:
+                out.print_md("  suppressed_dialogs: {}".format(len(suppressed_brief)))
+                for d in suppressed_brief:
+                    out.print_md("    - DialogId: {}".format(d.get("dialog_id", "")))
+                    out.print_md("      Type: {}".format(d.get("type", "")))
+                    out.print_md("      TypeFull: {}".format(d.get("type_full", "")))
+                    out.print_md("      Title: {}".format(d.get("title", "")))
+                    out.print_md(
+                        "      MainInstruction: {}".format(
+                            d.get("main_instruction", "")
+                        )
+                    )
+                    out.print_md("      Message: {}".format(d.get("message", "")))
+                    out.print_md(
+                        "      ExpandedContent: {}".format(
+                            d.get("expanded_content", "")
+                        )
+                    )
+                    all_props = d.get("all_string_props", {})
+                    if all_props:
+                        out.print_md("      AllStringProps:")
+                        for prop_name, prop_value in all_props.items():
+                            out.print_md(
+                                "        - {}: {}".format(
+                                    prop_name,
+                                    prop_value[:100]
+                                    if len(str(prop_value)) > 100
+                                    else prop_value,
+                                )
+                            )
+                    out.print_md("      Action: {}".format(d.get("action", "")))
 
             out.print_md(
                 "  before_close: readonly={}, path={}".format(
@@ -758,6 +927,26 @@ def action_run_python_script(models, scripts):
                 )
             )
 
+            if doc.IsWorkshared:
+                ws_status = get_workset_status(doc)
+                if ws_status:
+                    out.print_md(
+                        "  worksets: total={}, open={}, closed={}".format(
+                            ws_status["total"],
+                            ws_status["open_count"],
+                            ws_status["closed_count"],
+                        )
+                    )
+                    out.print_md(
+                        "  active_workset: {}".format(ws_status["active_workset"])
+                    )
+                    if ws_status["open_names"]:
+                        open_str = ", ".join(ws_status["open_names"])
+                        out.print_md("  open_worksets: {}".format(open_str))
+                    if ws_status["closed_names"]:
+                        closed_str = ", ".join(ws_status["closed_names"])
+                        out.print_md("  closed_worksets: {}".format(closed_str))
+
             scripts_succeeded = 0
             scripts_failed = 0
 
@@ -901,6 +1090,71 @@ def action_run_python_script(models, scripts):
                     scripts_failed += 1
                 finally:
                     sys.modules.pop(module_name, None)
+
+            # Выводим информацию о диалогах ПОСЛЕ выполнения скриптов
+            dialog_summary_after = dialog_suppressor.get_summary()
+            suppressed_brief = dialog_summary_after.get("suppressed_dialogs_brief", [])
+            if suppressed_brief:
+                out.print_md("  suppressed_dialogs: {}".format(len(suppressed_brief)))
+                for d in suppressed_brief:
+                    out.print_md("    - DialogId: {}".format(d.get("dialog_id", "")))
+                    out.print_md("      Type: {}".format(d.get("type", "")))
+                    out.print_md("      TypeFull: {}".format(d.get("type_full", "")))
+                    out.print_md("      Title: {}".format(d.get("title", "")))
+                    out.print_md(
+                        "      MainInstruction: {}".format(
+                            d.get("main_instruction", "")
+                        )
+                    )
+                    out.print_md("      Message: {}".format(d.get("message", "")))
+                    out.print_md(
+                        "      ExpandedContent: {}".format(
+                            d.get("expanded_content", "")
+                        )
+                    )
+                    all_props = d.get("all_string_props", {})
+                    if all_props:
+                        out.print_md("      AllStringProps:")
+                        for prop_name, prop_value in all_props.items():
+                            out.print_md(
+                                "        - {}: {}".format(
+                                    prop_name, prop_value[:100] if len(str(prop_value)) > 100 else prop_value
+                                )
+                            )
+                    out.print_md("      Action: {}".format(d.get("action", "")))
+
+            unknown_brief = dialog_summary_after.get("unknown_dialogs_brief", [])
+            if unknown_brief:
+                out.print_md("  unknown_dialogs: {}".format(len(unknown_brief)))
+                for d in unknown_brief:
+                    out.print_md("    - DialogId: {}".format(d.get("dialog_id", "")))
+                    out.print_md("      Type: {}".format(d.get("type", "")))
+                    out.print_md("      TypeFull: {}".format(d.get("type_full", "")))
+                    out.print_md("      Title: {}".format(d.get("title", "")))
+                    out.print_md(
+                        "      MainInstruction: {}".format(
+                            d.get("main_instruction", "")
+                        )
+                    )
+                    out.print_md("      Message: {}".format(d.get("message", "")))
+                    out.print_md(
+                        "      ExpandedContent: {}".format(
+                            d.get("expanded_content", "")
+                        )
+                    )
+                    all_props = d.get("all_string_props", {})
+                    if all_props:
+                        out.print_md("      AllStringProps:")
+                        for prop_name, prop_value in all_props.items():
+                            out.print_md(
+                                "        - {}: {}".format(
+                                    prop_name,
+                                    prop_value[:100]
+                                    if len(str(prop_value)) > 100
+                                    else prop_value,
+                                )
+                            )
+                    out.print_md("      Action: {}".format(d.get("action", "")))
 
             out.print_md(
                 "  before_close: readonly={}, path={}".format(

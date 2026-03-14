@@ -155,7 +155,6 @@ def FillUndergroundAboveground(doc, progress_callback=None):
 
     if total == 0:
         return {
-            "planned_value": None,
             "total": 0,
             "updated_count": 0,
             "skipped_count": 0,
@@ -208,7 +207,6 @@ def FillUndergroundAboveground(doc, progress_callback=None):
         message += "; reasons: " + reasons_str
 
     return {
-        "planned_value": sorted(list(all_values)),
         "total": total,
         "updated_count": updated_count,
         "skipped_count": skipped_count,
@@ -225,20 +223,23 @@ def Execute(doc, progress_callback=None):
 
     try:
         param_result = EnsureParameterExists(doc)
-        
+
         # Проверяем результат добавления параметра
         if not param_result.get("success", False):
             if not param_result.get("parameters", {}).get("existing"):
                 t.RollBack()
                 return {
                     "success": False,
-                    "message": param_result.get("message", "Не удалось добавить параметр"),
-                    "parameters": param_result.get("parameters", {"added": [], "existing": [], "failed": []}),
+                    "message": param_result.get(
+                        "message", "Не удалось добавить параметр"
+                    ),
+                    "parameters": param_result.get(
+                        "parameters", {"added": [], "existing": [], "failed": []}
+                    ),
                     "fill": {
                         "target_param": "ADSK_ПодземныйНадземный",
                         "source": "Координата Z элемента",
                         "filled": False,
-                        "planned_value": None,
                         "total": 0,
                         "updated_count": 0,
                         "skipped_count": 0,
@@ -246,7 +247,7 @@ def Execute(doc, progress_callback=None):
                         "values": [],
                     },
                 }
-        
+
         fill_result = FillUndergroundAboveground(doc, progress_callback)
 
         t.Commit()
@@ -259,7 +260,6 @@ def Execute(doc, progress_callback=None):
                 "target_param": "ADSK_ПодземныйНадземный",
                 "source": "Координата Z элемента",
                 "filled": fill_result["filled"],
-                "planned_value": fill_result["planned_value"],
                 "total": fill_result["total"],
                 "updated_count": fill_result["updated_count"],
                 "skipped_count": fill_result["skipped_count"],
@@ -290,7 +290,6 @@ def Execute(doc, progress_callback=None):
                 "target_param": "ADSK_ПодземныйНадземный",
                 "source": "Координата Z элемента",
                 "filled": False,
-                "planned_value": None,
                 "total": 0,
                 "updated_count": 0,
                 "skipped_count": 0,

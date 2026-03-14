@@ -873,18 +873,6 @@ def main():
         forms.alert(u"Не удалось извлечь данные из отчёта.", title=u"Пересечения")
         return
 
-    # Выбор проверок
-    all_tests = sorted(groups.keys(), key=lambda s: s.lower())
-    picked = forms.SelectFromList.show(
-        all_tests,
-        multiselect=True,
-        title=u"Выберите проверки (можно несколько). Вверху есть строка поиска.",
-        button_name=u"Показать"
-    )
-
-    if picked and len(picked) < len(all_tests):
-        groups = {t: groups.get(t, []) for t in picked}
-
     # Инициализация компонентов
     highlighter = PathHighlighter(element_cache)
     result_filter = ResultFilter(element_cache)

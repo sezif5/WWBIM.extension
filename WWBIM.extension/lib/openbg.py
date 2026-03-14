@@ -139,8 +139,10 @@ class DialogSuppressor(object):
             dialog_info = {
                 "dialog_id": dialog_id,
                 "type": "TaskDialogShowingEventArgs",
-                "message": message,
+                "title": getattr(args, "Title", None),
                 "main_instruction": main_instruction,
+                "message": message,
+                "expanded_content": getattr(args, "ExpandedContent", None),
                 "action": "logged" if self._log_only else "unknown",
             }
             self.suppressed_dialogs.append(dialog_info)
@@ -152,6 +154,7 @@ class DialogSuppressor(object):
             message_lower = (message or "").lower()
             main_instruction_lower = (main_instruction or "").lower()
             identifier_lower = dialog_id.lower()
+            full_text = message_lower + " " + main_instruction_lower
 
             # 1. Проверка по DialogId (как в C# IsSuppressedDialog)
             if any(
@@ -163,19 +166,22 @@ class DialogSuppressor(object):
                 return
 
             # 2. Coordination Review → OK
-            if (
-                "coordination review" in message_lower
-                or "требуется просмотр координаций" in message_lower
+            if any(
+                kw in full_text
+                for kw in [
+                    "coordination review",
+                    "требуется просмотр координаций",
+                    "для экземпляра связи требуется",
+                    "просмотр координаций",
+                ]
             ):
                 dialog_info["action"] = "suppressed (OK)"
                 args.OverrideResult(TaskDialogResult.Ok)
                 return
 
             # 3. Missing/Unresolved links → No (ТОЛЬКО точные фразы)
-            # НЕ используем общие "link"/"reference" - слишком широко
-            # Проверяем контекст - только если явно про связи
             if any(
-                kw in message_lower
+                kw in full_text
                 for kw in [
                     "не удается найти",
                     "cannot find",
@@ -186,7 +192,7 @@ class DialogSuppressor(object):
                 ]
             ):
                 if any(
-                    kw in message_lower
+                    kw in full_text
                     for kw in ["связ", "ссылка", "link", "reference", "file"]
                 ):
                     dialog_info["action"] = "suppressed (No - open without search)"
@@ -195,7 +201,7 @@ class DialogSuppressor(object):
 
             # 4. Geometry errors / No suitable geometry → OK
             if any(
-                kw in message_lower
+                kw in full_text
                 for kw in [
                     "не найдена подходящая геометрия",
                     "элементов для геометрии не найдено",
@@ -210,30 +216,49 @@ class DialogSuppressor(object):
                 args.OverrideResult(TaskDialogResult.Ok)
                 return
 
-            # 4. Room tag outside room → OK
+            # 5. Room tag outside room → OK
             if any(
-                kw in message_lower
+                kw in full_text
                 for kw in [
-                    "марка помещение вне элемента помещение",
-                    "room tag is outside of its room",
+                    "марка помещение вне элемента",
+                    "включите выноску или перенесите марку",
+                    "внутрь соответствующего элемента",
+                    "room tag is outside",
+                    "enable leader or move the tag",
+                    "move the tag inside",
                 ]
             ):
                 dialog_info["action"] = "suppressed (OK)"
                 args.OverrideResult(TaskDialogResult.Ok)
                 return
 
-            # 5. Dimension reference / Wrong dimension → OK
+            # 6. Dimension reference / Wrong dimension → OK
             if any(
-                kw in message_lower
+                kw in full_text
                 for kw in ["опорных элементов размеров", "dimension reference"]
             ):
                 dialog_info["action"] = "suppressed (OK)"
                 args.OverrideResult(TaskDialogResult.Ok)
                 return
 
-            # 6. Transmitted model dialog → CommandLink1 (Save this model)
-            # Проверяем по DialogId и тексту диалога (рус/англ) - в message И main_instruction
-            full_text = message_lower + " " + main_instruction_lower
+            # 7. Duplicate values → OK
+            if any(
+                kw in full_text
+                for kw in [
+                    "элементы имеют повторяющиеся значения",
+                    "повторяющиеся значения",
+                    "дубликат",
+                    "duplicate values",
+                    "elements have duplicate",
+                    "элементы имеют дубликат",
+                    "elements have duplicate",
+                ]
+            ):
+                dialog_info["action"] = "suppressed (OK)"
+                args.OverrideResult(TaskDialogResult.Ok)
+                return
+
+            # 8. Transmitted model dialog → CommandLink1 (Save this model)
             if "transmitted" in identifier_lower or any(
                 kw in full_text
                 for kw in [
@@ -279,12 +304,16 @@ class DialogSuppressor(object):
                 pass
 
             message = args.Message
+            main_instruction = getattr(args, "MainInstruction", "") or ""
 
             # Логируем информацию о диалоге
             dialog_info = {
                 "dialog_id": dialog_id,
                 "type": "MessageBoxShowingEventArgs",
+                "title": getattr(args, "Title", None),
+                "main_instruction": main_instruction,
                 "message": message,
+                "expanded_content": getattr(args, "ExpandedContent", None),
                 "action": "logged" if self._log_only else "unknown",
             }
             self.suppressed_dialogs.append(dialog_info)
@@ -295,16 +324,36 @@ class DialogSuppressor(object):
 
             # Для MessageBox используем целочисленные ID (как в C# примере)
             message_lower = (message or "").lower()
+            main_instruction_lower = main_instruction.lower()
+            full_text = message_lower + " " + main_instruction_lower
+            identifier_lower = (dialog_id or "").lower()
 
-            # Coordination Review → OK (1)
-            if "coordination review" in message_lower:
+            # 1. Проверка по DialogId
+            if any(
+                kw in identifier_lower
+                for kw in ["docwarndialog", "coordination", "review"]
+            ):
+                dialog_info["action"] = "suppressed by DialogId (OK)"
+                args.OverrideResult(1)
+                return
+
+            # 2. Coordination Review → OK (1)
+            if any(
+                kw in full_text
+                for kw in [
+                    "coordination review",
+                    "требуется просмотр координаций",
+                    "для экземпляра связи требуется",
+                    "просмотр координаций",
+                ]
+            ):
                 dialog_info["action"] = "suppressed (OK)"
                 args.OverrideResult(1)
                 return
 
-            # Missing/Unresolved links → No (ТОЛЬКО точные фразы)
+            # 3. Missing/Unresolved links → No (7)
             if any(
-                kw in message_lower
+                kw in full_text
                 for kw in [
                     "не удается найти",
                     "cannot find",
@@ -315,16 +364,16 @@ class DialogSuppressor(object):
                 ]
             ):
                 if any(
-                    kw in message_lower
+                    kw in full_text
                     for kw in ["связ", "ссылка", "link", "reference", "file"]
                 ):
                     dialog_info["action"] = "suppressed (No - open without search)"
                     args.OverrideResult(7)
                     return
 
-            # Geometry errors / Minor warnings → OK (1)
+            # 4. Geometry errors → OK (1)
             if any(
-                kw in message_lower
+                kw in full_text
                 for kw in [
                     "не найдена подходящая геометрия",
                     "элементов для геометрии не найдено",
@@ -339,22 +388,43 @@ class DialogSuppressor(object):
                 args.OverrideResult(1)
                 return
 
-            # Room tag outside room → OK (1)
+            # 5. Room tag outside room → OK (1)
             if any(
-                kw in message_lower
+                kw in full_text
                 for kw in [
-                    "марка помещение вне элемента помещение",
-                    "room tag is outside of its room",
+                    "марка помещение вне элемента",
+                    "включите выноску или перенесите марку",
+                    "внутрь соответствующего элемента",
+                    "room tag is outside",
+                    "enable leader or move the tag",
+                    "move the tag inside",
                 ]
             ):
                 dialog_info["action"] = "suppressed (OK)"
                 args.OverrideResult(1)
                 return
 
-            # Dimension reference → OK (1)
+            # 6. Dimension reference → OK (1)
             if any(
-                kw in message_lower
+                kw in full_text
                 for kw in ["опорных элементов размеров", "dimension reference"]
+            ):
+                dialog_info["action"] = "suppressed (OK)"
+                args.OverrideResult(1)
+                return
+
+            # 7. Duplicate values → OK (1)
+            if any(
+                kw in full_text
+                for kw in [
+                    "элементы имеют повторяющиеся значения",
+                    "повторяющиеся значения",
+                    "дубликат",
+                    "duplicate values",
+                    "elements have duplicate",
+                    "элементы имеют дубликат",
+                    "elements have duplicate",
+                ]
             ):
                 dialog_info["action"] = "suppressed (OK)"
                 args.OverrideResult(1)
@@ -385,14 +455,112 @@ class DialogSuppressor(object):
             elif isinstance(args, MessageBoxShowingEventArgs):
                 self._on_message_box_showing(sender, args)
             else:
-                # Неизвестный тип аргумента - логируем
+                # Неизвестный тип аргумента - логируем с рефлексивным дампом
+                args_type_full = ""
+                try:
+                    args_type_full = args.GetType().FullName
+                except Exception:
+                    args_type_full = type(args).__name__
+
+                # Рефлексивный дамп всех строковых свойств
+                all_string_props = {}
+                try:
+                    props = args.GetType().GetProperties()
+                    for prop in props:
+                        try:
+                            if prop.PropertyType.FullName == "System.String":
+                                value = prop.GetValue(args, None)
+                                if value:
+                                    all_string_props[prop.Name] = value
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
                 dialog_info = {
                     "dialog_id": getattr(args, "DialogId", None),
                     "type": type(args).__name__,
+                    "type_full": args_type_full,
+                    "title": getattr(args, "Title", None),
+                    "main_instruction": getattr(args, "MainInstruction", None),
                     "message": getattr(args, "Message", None),
+                    "expanded_content": getattr(args, "ExpandedContent", None),
+                    "all_string_props": all_string_props,
                     "action": "unknown type",
                 }
                 self.suppressed_dialogs.append(dialog_info)
+
+                # Подавление для неизвестных типов диалогов
+                if not self._log_only:
+                    dialog_id = getattr(args, "DialogId", None) or ""
+                    identifier_lower = dialog_id.lower()
+
+                    message = getattr(args, "Message", "") or ""
+                    main_instruction = getattr(args, "MainInstruction", "") or ""
+                    expanded_content = getattr(args, "ExpandedContent", "") or ""
+                    full_text = (
+                        message + " " + main_instruction + " " + expanded_content
+                    ).lower()
+
+                    # Подавление по DialogId
+                    if "docwarndialog" in identifier_lower:
+                        dialog_info["action"] = "suppressed by DialogId (OK)"
+                        args.OverrideResult(1)
+                        return
+
+                    # Подавление по тексту - Duplicate values
+                    if any(
+                        kw in full_text
+                        for kw in [
+                            "элементы имеют повторяющиеся значения",
+                            "повторяющиеся значения",
+                            "дубликат",
+                            "duplicate values",
+                            "elements have duplicate",
+                        ]
+                    ):
+                        dialog_info["action"] = "suppressed by text (OK)"
+                        args.OverrideResult(1)
+                        return
+
+                    # Подавление по тексту - Coordination Review
+                    if any(
+                        kw in full_text
+                        for kw in [
+                            "coordination review",
+                            "требуется просмотр координаций",
+                            "для экземпляра связи требуется",
+                        ]
+                    ):
+                        dialog_info["action"] = "suppressed by text (OK)"
+                        args.OverrideResult(1)
+                        return
+
+                    # Подавление по тексту - Room tag outside
+                    if any(
+                        kw in full_text
+                        for kw in [
+                            "марка помещение вне элемента",
+                            "room tag is outside",
+                            "enable leader or move",
+                        ]
+                    ):
+                        dialog_info["action"] = "suppressed by text (OK)"
+                        args.OverrideResult(1)
+                        return
+
+                    # Подавление по тексту - Geometry errors
+                    if any(
+                        kw in full_text
+                        for kw in [
+                            "не найдена подходящая геометрия",
+                            "no suitable geometry",
+                            "no appropriate geometry",
+                        ]
+                    ):
+                        dialog_info["action"] = "suppressed by text (OK)"
+                        args.OverrideResult(1)
+                        return
         except Exception as e:
             self.suppressed_dialogs.append(
                 {
@@ -434,21 +602,21 @@ class DialogSuppressor(object):
             d for d in self.suppressed_dialogs if d.get("action") == "handler_error"
         ]
 
-        # Формируем краткое описание unknown диалогов (первые 5)
-        unknown_dialogs_brief = []
-        max_brief = 5
-        for d in unknown[:max_brief]:
-            dialog_id = d.get("dialog_id", "")
-            message = d.get("message", "") or ""
-            main_instruction = d.get("main_instruction", "") or ""
-            # Объединяем message и main_instruction, обрезаем до 120 символов
-            combined_text = (main_instruction + " " + message).strip()[:120]
-            unknown_dialogs_brief.append(
-                {
-                    "dialog_id": dialog_id,
-                    "text_preview": combined_text,
-                }
-            )
+        def make_brief(d):
+            return {
+                "dialog_id": d.get("dialog_id", ""),
+                "type": d.get("type", "") or "",
+                "type_full": d.get("type_full", "") or "",
+                "title": d.get("title", "") or "",
+                "main_instruction": d.get("main_instruction", "") or "",
+                "message": d.get("message", "") or "",
+                "expanded_content": d.get("expanded_content", "") or "",
+                "all_string_props": d.get("all_string_props", {}) or {},
+                "action": d.get("action", ""),
+            }
+
+        unknown_dialogs_brief = [make_brief(d) for d in unknown[:5]]
+        suppressed_dialogs_brief = [make_brief(d) for d in suppressed]
 
         return {
             "total": len(self.suppressed_dialogs),
@@ -463,6 +631,7 @@ class DialogSuppressor(object):
             "unknown_dialogs": unknown,
             "error_dialogs": errors,
             "unknown_dialogs_brief": unknown_dialogs_brief,
+            "suppressed_dialogs_brief": suppressed_dialogs_brief,
         }
 
     def __enter__(self):

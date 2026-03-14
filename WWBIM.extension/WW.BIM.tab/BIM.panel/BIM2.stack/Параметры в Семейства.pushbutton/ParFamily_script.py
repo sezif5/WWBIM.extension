@@ -446,6 +446,7 @@ class MainController(object):
             self.lbGroups.SelectedIndex = 0
         self.lbGroups.SelectionChanged += self._on_group_changed
         self._on_group_changed()
+        self.lbParams.MouseDoubleClick += self._on_params_double_click
 
         # BIPG options
         self._bipg_items = all_bipg_options()
@@ -494,12 +495,27 @@ class MainController(object):
         g = self._group_by_name.get(gname)
         if not g:
             return
+        param_names = []
         for d in g.Definitions:
             try:
                 if isinstance(d, ExternalDefinition):
-                    self.lbParams.Items.Add(d.Name)
+                    param_names.append(d.Name)
             except Exception as e:
                 logger.debug(u'Ошибка при чтении определения параметра: {}'.format(e))
+
+        for pname in sorted(param_names, key=lambda x: x.lower()):
+            self.lbParams.Items.Add(pname)
+
+    def _on_params_double_click(self, sender, args):
+        try:
+            if self.lbParams.SelectedItem is not None:
+                self._add_to_queue(sender, args)
+                try:
+                    args.Handled = True
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug(u'Ошибка double-click добавления в очередь: {}'.format(e))
 
     def _add_to_queue(self, sender, args):
         if self.lbParams.SelectedItems is None or self.lbParams.SelectedItems.Count == 0:
@@ -522,7 +538,19 @@ class MainController(object):
                     extdef = d; break
             if extdef is None: continue
             qi = QueueItem(extdef.Name, str(extdef.GUID), gname, is_inst, bipg, formula_text)
-            if not any(x.Name == qi.Name for x in list(self._queue)):
+            existing = next((x for x in list(self._queue) if x.Name == qi.Name), None)
+            if existing is not None:
+                # Обновляем уже существующую запись, чтобы выбор группирования применялся
+                existing.Guid = qi.Guid
+                existing.GroupName = qi.GroupName
+                existing.IsInstance = qi.IsInstance
+                existing.Bipg = qi.Bipg
+                existing.Formula = qi.Formula
+                try:
+                    self.dgQueue.Items.Refresh()
+                except Exception:
+                    pass
+            else:
                 self._queue.Add(qi)
 
     def _remove_selected(self, sender, args):

@@ -485,6 +485,24 @@ def _ask_since_select(ref_dt):
 # Поиск исторических отчётов (берём максимум 5 последних <= основному)
 # -----------------------------
 
+def _dedup_rows(rows):
+    order = {u'Создать':5, u'Активные':4, u'Подтвержденные':3, u'Проверенные':2, u'Исправленные':1}
+    def sort_key(r):
+        return (-order.get(r.get('status', u''), 0),
+                r.get('idsig', u'') or r.get('sig', u'') or u'',
+                r.get('cname', u'') or u'')
+    sorted_rows = sorted(rows, key=sort_key)
+    seen = set()
+    unique = []
+    for r in sorted_rows:
+        k = r.get('idsig', u'') or r.get('sig', u'') or u''
+        if not k:
+            unique.append(r)
+        elif k not in seen:
+            seen.add(k)
+            unique.append(r)
+    return unique
+
 def find_history_reports(main_xml_path, limit=5, since_dt=None):
     main_xml_path = os.path.abspath(main_xml_path)
     main_name = os.path.basename(main_xml_path)
@@ -535,15 +553,13 @@ def find_history_reports(main_xml_path, limit=5, since_dt=None):
         try:
             rows = parse_xml(p)
             ts = datetime.datetime.fromtimestamp(mt).strftime('%Y-%m-%d %H:%M')
-            # Для истории сохраняем только агрегаты, не сырые rows
-            # Подсчёт по статусам
+            unique_rows = _dedup_rows(rows)
             status_counts = {}
             section_counts = {}
-            total = len(rows)
-            for r in rows:
+            total = len(unique_rows)
+            for r in unique_rows:
                 st = r.get('status', u'Создать')
                 status_counts[st] = status_counts.get(st, 0) + 1
-                # Подсчёт по разделам (берём оба раздела из коллизии)
                 secA = r.get('sectionA', u'Прочее')
                 secB = r.get('sectionB', u'Прочее')
                 if secA:
@@ -1264,6 +1280,7 @@ var DATA = {rows: %ROWS%, statusColors: %SCOLORS%, history: %HISTORY%};
       yAxis:{ 
         type:'category',
         data: pairLabels,
+        inverse: true,
         axisLabel:{
           color:'#fff',
           interval: 0,

@@ -122,7 +122,6 @@ def FillMarkParameter(doc, progress_callback=None):
 
     if total == 0:
         return {
-            "planned_value": None,
             "total": 0,
             "updated_count": 0,
             "skipped_count": 0,
@@ -170,8 +169,8 @@ def FillMarkParameter(doc, progress_callback=None):
     reasons_str = "; ".join(
         ["{0}={1}".format(k, v) for k, v in skip_reasons.items() if v > 0]
     )
-    message = "planned={0}, total={1}, updated={2}, skipped={3}".format(
-        sorted(list(all_values)), total, updated_count, skipped_count
+    message = "total={0}, updated={1}, skipped={2}".format(
+        total, updated_count, skipped_count
     )
     if reasons_str:
         message += "; reasons: " + reasons_str
@@ -180,7 +179,6 @@ def FillMarkParameter(doc, progress_callback=None):
     )
 
     return {
-        "planned_value": sorted(list(all_values)),
         "total": total,
         "updated_count": updated_count,
         "skipped_count": skipped_count,
@@ -208,7 +206,6 @@ def Execute(doc, progress_callback=None):
                 "target_param": "Марка",
                 "source_param": "ADSK_Марка",
                 "filled": fill_result["filled"],
-                "planned_value": fill_result["planned_value"],
                 "total": fill_result["total"],
                 "updated_count": fill_result["updated_count"],
                 "skipped_count": fill_result["skipped_count"],
@@ -240,7 +237,6 @@ def Execute(doc, progress_callback=None):
                 "target_param": "Марка",
                 "source_param": "ADSK_Марка",
                 "filled": False,
-                "planned_value": None,
                 "total": 0,
                 "updated_count": 0,
                 "skipped_count": 0,
