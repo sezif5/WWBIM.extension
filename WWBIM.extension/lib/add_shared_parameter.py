@@ -120,6 +120,104 @@ def FindExternalDefinition(def_file, param_name, diagnostics=None):
     return None, None
 
 
+def FindExternalDefinitionByGuid(def_file, target_guid, diagnostics=None):
+    """Находит ExternalDefinition в ФОП по GUID."""
+    if not target_guid:
+        return None
+    try:
+        for group in def_file.Groups:
+            for definition in group.Definitions:
+                if hasattr(definition, "GUID") and definition.GUID == target_guid:
+                    return definition, group.Name
+    except Exception as e:
+        _add_exception(diagnostics, "FindExternalDefinitionByGuid", e)
+    return None, None
+
+
+def RestoreBindingForExistingSharedParameter(
+    doc, spe, def_file, binding_type, param_group, categories, diagnostics=None
+):
+    """
+    Восстанавливает binding для существующего SharedParameterElement.
+
+    1. Берёт GUID из SharedParameterElement
+    2. Ищет ExternalDefinition в ФОП по GUID
+    3. Создаёт binding и привязывает к категориям
+
+    Возвращает (success, message, info_dict)
+    """
+    info = {
+        "restored": False,
+        "guid": None,
+        "group_name": None,
+        "insert_result": None,
+        "reinsert_result": None,
+    }
+
+    spe_guid = spe.GuidValue
+    info["guid"] = str(spe_guid) if spe_guid else None
+
+    if not spe_guid:
+        return False, "SharedParameterElement не имеет GUID", info
+
+    # Ищем ExternalDefinition в ФОП по GUID
+    ext_def, group_name = FindExternalDefinitionByGuid(def_file, spe_guid, diagnostics)
+    info["group_name"] = group_name
+
+    if not ext_def:
+        return (
+            False,
+            "Параметр с GUID '{0}' не найден в ФОП, восстановление невозможно".format(
+                str(spe_guid)
+            ),
+            info,
+        )
+
+    # Создаём CategorySet и Binding
+    cat_set, skipped_categories = CreateCategorySet(doc, categories, diagnostics)
+
+    if cat_set.Size == 0:
+        return (
+            False,
+            "Не удалось добавить ни одной категории для восстановления binding",
+            info,
+        )
+
+    app = doc.Application
+    binding = CreateBinding(app, binding_type, cat_set)
+
+    # Пытаемся привязать
+    bindings = doc.ParameterBindings
+    insert_result = bindings.Insert(ext_def, binding, param_group)
+    info["insert_result"] = insert_result
+
+    if insert_result:
+        info["restored"] = True
+        try:
+            ParameterElement.SetAllowVaryBetweenGroups(doc, spe.Id, True)
+        except Exception as e:
+            _add_exception(diagnostics, "SetAllowVaryBetweenGroups", e)
+        return True, "Binding успешно восстановлен (Insert)", info
+
+    # Если Insert не прошёл — пробуем ReInsert
+    reinsert_result = bindings.ReInsert(ext_def, binding, param_group)
+    info["reinsert_result"] = reinsert_result
+
+    if reinsert_result:
+        info["restored"] = True
+        try:
+            ParameterElement.SetAllowVaryBetweenGroups(doc, spe.Id, True)
+        except Exception as e:
+            _add_exception(diagnostics, "SetAllowVaryBetweenGroups", e)
+        return True, "Binding успешно восстановлен (ReInsert)", info
+
+    return (
+        False,
+        "Не удалось восстановить binding (Insert и ReInsert вернули False)",
+        info,
+    )
+
+
 def IsParameterAlreadyBound(doc, ext_def, diagnostics=None):
     """
     Проверяет, привязан ли уже общий параметр к документу.
@@ -393,18 +491,49 @@ def AddSharedParameterToDoc(doc, config=None):
         )
 
         if not bound_by_name:
-            diagnostics["mode"] = "failed"
-            diagnostics["bound_after_operation"] = False
-            diagnostics["found_shared_guids"] = found_guids
-            result["mode"] = "failed"
-            result["success"] = False
-            result["message"] = (
-                "SharedParameterElement с именем '{0}' найден, но parameter binding отсутствует".format(
-                    config["PARAMETER_NAME"]
+            # Binding отсутствует — пытаемся восстановить
+            restore_success, restore_message, restore_info = (
+                RestoreBindingForExistingSharedParameter(
+                    doc,
+                    same_name_spes[0],  # Берём первый найденный
+                    def_file,
+                    config["BINDING_TYPE"],
+                    config["PARAMETER_GROUP"],
+                    config["CATEGORIES"],
+                    diagnostics,
                 )
             )
-            result["parameters"]["failed"].append(config["PARAMETER_NAME"])
-            return result
+
+            diagnostics["restore_info"] = restore_info
+
+            if restore_success:
+                diagnostics["mode"] = "binding_restored"
+                diagnostics["bound_after_operation"] = True
+                diagnostics["found_shared_guids"] = found_guids
+                diagnostics["bound_definition_name"] = config["PARAMETER_NAME"]
+                diagnostics["use_param_name"] = config["PARAMETER_NAME"]
+                result["mode"] = "binding_restored"
+                result["found_shared_guids"] = found_guids
+                result["use_param_name"] = config["PARAMETER_NAME"]
+                result["bound_after_operation"] = True
+                result["success"] = True
+                result["message"] = restore_message
+                result["parameters"]["added"].append(config["PARAMETER_NAME"])
+                return result
+            else:
+                # Не удалось восстановить
+                diagnostics["mode"] = "failed"
+                diagnostics["bound_after_operation"] = False
+                diagnostics["found_shared_guids"] = found_guids
+                result["mode"] = "failed"
+                result["success"] = False
+                result["message"] = (
+                    "SharedParameterElement с именем '{0}' найден, но binding восстановить не удалось: {1}".format(
+                        config["PARAMETER_NAME"], restore_message
+                    )
+                )
+                result["parameters"]["failed"].append(config["PARAMETER_NAME"])
+                return result
 
         diagnostics["mode"] = "use_existing_shared_by_name"
         diagnostics["guid_match"] = False

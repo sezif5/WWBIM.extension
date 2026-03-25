@@ -453,6 +453,12 @@ def SetKitCodeParameter(element, kit_code):
         if param.IsReadOnly:
             return {"status": "readonly", "reason": "readonly"}
 
+        # Если у элемента уже есть значение — не перезаписываем (первый выигрывает)
+        if param.HasValue:
+            existing_value = param.AsString()
+            if existing_value:
+                return {"status": "already_ok", "reason": "already_ok"}
+
         try:
             param.Set(kit_code)
             return {"status": "updated", "reason": None}

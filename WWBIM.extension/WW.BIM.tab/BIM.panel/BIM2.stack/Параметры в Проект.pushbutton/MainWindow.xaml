@@ -107,8 +107,10 @@
             <Button x:Name='btnPresetStruct' Content='Конструкции' Margin='0,0,8,0' Padding='8,4'/>
             <Button x:Name='btnClearCats' Content='Очистить' Padding='8,4'/>
           </StackPanel>
-          <TextBox x:Name='tbCategoryFilter' DockPanel.Dock='Top' Margin='0,0,0,8'
+          <TextBox x:Name='tbCategoryFilter' DockPanel.Dock='Top' Margin='0,0,0,6'
                    ToolTip='Фильтр категорий...' Text='' />
+          <CheckBox x:Name='cbSelectedOnly' DockPanel.Dock='Top' Margin='0,0,0,8'
+                    Content='Показывать только выбранные'/>
           <ListBox x:Name='lbCategories' SelectionMode='Extended'>
             <ListBox.ItemTemplate>
               <DataTemplate>
