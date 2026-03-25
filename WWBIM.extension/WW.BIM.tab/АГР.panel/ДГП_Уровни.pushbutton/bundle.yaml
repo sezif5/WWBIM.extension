@@ -1,12 +1,10 @@
 title:
-  ru: "ДГП\nПараметры"
+  ru: "ДГП\nУровни"
   en_us: "DGP\nParameters"
 
 tooltip:
   ru: >-
-    Заполняет общие текстовые параметры ДГП_* для всей модели на основе категории элемента и значения параметра "Группа модели".
-    Источник параметров может быть числовым или текстовым; значения записываются как отображаемые строки без единиц измерения.
-    Записывает только если значение отличается; пропускает отсутствующие параметры.
+    Копирование названия уровня из параметра ДГП_Имя уровня в параметр Имя
   en_us: >-
     Fills shared text parameters (ДГП_*) across the active document using deterministic rules keyed by (Category + optional "Группа модели").
     Source parameters can be numeric or text; values are written as project display strings without unit suffixes.
