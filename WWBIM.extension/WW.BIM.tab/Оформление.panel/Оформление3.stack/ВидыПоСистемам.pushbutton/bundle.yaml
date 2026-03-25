@@ -1,0 +1,14 @@
+title:
+  ru: "Виды\nпо системам"
+  en_us: "Displacement\nSet"
+
+tooltip:
+  ru: Скрипт создаёт отдельные 3D-виды для каждой выбранной системы,с фильтром по имени системы и 3D-подрезкой границ.
+
+  en_us: Creates 3D views for selected MEP systems with filters
+
+author: Влад
+help_url: ""
+
+min_revit_version: 2020
+max_revit_version: 2024

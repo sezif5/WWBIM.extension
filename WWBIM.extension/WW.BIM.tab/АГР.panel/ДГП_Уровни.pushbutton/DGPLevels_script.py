@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-ДГП Уровни — копирование названия уровня из параметра ДГП_Имя уровня в параметр Имя.
+ДГП Уровни — обмен значениями между параметрами ДГП_Имя уровня и Имя для всех уровней.
 """
 
 from __future__ import print_function, division
@@ -16,8 +16,8 @@ output = script.get_output()
 # PARAM NAMES
 # ============================================================================
 
-PARAM_SOURCE_NAME = "ДГП_Имя уровня"
-PARAM_TARGET_NAME = "Имя"
+PARAM_1 = "ДГП_Имя уровня"
+PARAM_2 = "Имя"
 
 
 # ============================================================================
@@ -85,13 +85,6 @@ def set_param_value(elem, param_name, value):
             "reason": "wrong_storage_type",
             "param": param_name,
         }
-    current = get_param_text(param)
-    if normalize_for_compare(current) == normalize_for_compare(value):
-        return {
-            "status": "already_ok",
-            "reason": "already_ok",
-            "param": param_name,
-        }
     try:
         param.Set(to_unicode(value))
         return {
@@ -117,12 +110,11 @@ def process_levels():
         "total_processed": 0,
         "total_updated": 0,
         "total_skipped": 0,
+        "total_swapped": 0,
         "skip_reasons": {
-            "source_empty": 0,
+            "both_empty": 0,
             "parameter_not_found": 0,
             "readonly": 0,
-            "already_ok": 0,
-            "wrong_storage_type": 0,
             "exception": 0,
         },
         "results": [],
@@ -142,11 +134,9 @@ def process_levels():
         return stats
 
     skip_labels = {
-        "source_empty": "Пустое значение в ДГП_Имя уровня",
-        "parameter_not_found": "Не найден целевой параметр",
+        "both_empty": "Оба параметра пустые",
+        "parameter_not_found": "Не найден параметр",
         "readonly": "Параметр только для чтения",
-        "already_ok": "Значение уже совпадает",
-        "wrong_storage_type": "Неверный тип параметра",
         "exception": "Ошибка при записи",
     }
 
@@ -158,59 +148,114 @@ def process_levels():
         except Exception:
             level_id = -1
 
-        source_param = get_param(level, PARAM_SOURCE_NAME)
-        source_value = get_param_text(source_param)
+        param1 = get_param(level, PARAM_1)
+        param2 = get_param(level, PARAM_2)
 
-        if not source_value or source_value.strip() == "":
-            stats["skip_reasons"]["source_empty"] += 1
+        val1_old = get_param_text(param1)
+        val2_old = get_param_text(param2)
+
+        # Пропускаем если оба параметра пустые
+        if (not val1_old or val1_old.strip() == "") and (
+            not val2_old or val2_old.strip() == ""
+        ):
+            stats["skip_reasons"]["both_empty"] += 1
             stats["total_skipped"] += 1
             stats["results"].append(
                 {
                     "id": level_id,
                     "level_name": level.Name if hasattr(level, "Name") else "?",
                     "status": "skipped",
-                    "reason": "source_empty",
+                    "reason": "both_empty",
+                    "val1_old": val1_old,
+                    "val2_old": val2_old,
+                    "val1_new": None,
+                    "val2_new": None,
                 }
             )
             continue
 
-        result = set_param_value(level, PARAM_TARGET_NAME, source_value)
-        status = result.get("status")
-        reason = result.get("reason")
+        # Проверяем параметры
+        param1_ok = (
+            param1
+            and not param1.IsReadOnly
+            and param1.StorageType == DB.StorageType.String
+        )
+        param2_ok = (
+            param2
+            and not param2.IsReadOnly
+            and param2.StorageType == DB.StorageType.String
+        )
 
-        if status == "updated":
-            stats["total_updated"] += 1
-            stats["results"].append(
-                {
-                    "id": level_id,
-                    "level_name": level.Name if hasattr(level, "Name") else "?",
-                    "status": "updated",
-                    "reason": None,
-                }
-            )
-        elif status == "already_ok":
-            stats["skip_reasons"]["already_ok"] += 1
-            stats["total_skipped"] += 1
-        elif reason in stats["skip_reasons"]:
-            stats["skip_reasons"][reason] += 1
+        if not param1_ok and not param2_ok:
+            stats["skip_reasons"]["parameter_not_found"] += 1
             stats["total_skipped"] += 1
             stats["results"].append(
                 {
                     "id": level_id,
                     "level_name": level.Name if hasattr(level, "Name") else "?",
                     "status": "skipped",
-                    "reason": reason,
+                    "reason": "parameter_not_found",
+                    "val1_old": val1_old,
+                    "val2_old": val2_old,
+                    "val1_new": None,
+                    "val2_new": None,
+                }
+            )
+            continue
+
+        # Выполняем обмен значениями
+        val1_new = val2_old if param1_ok else val1_old
+        val2_new = val1_old if param2_ok else val2_old
+
+        # Записываем новые значения
+        if param1_ok and normalize_for_compare(val1_old) != normalize_for_compare(
+            val1_new
+        ):
+            result = set_param_value(level, PARAM_1, val1_new)
+            if result.get("status") != "updated":
+                val1_new = val1_old  # Не удалось записать
+        else:
+            val1_new = val1_old  # Нет смысла писать то же значение
+
+        if param2_ok and normalize_for_compare(val2_old) != normalize_for_compare(
+            val2_new
+        ):
+            result = set_param_value(level, PARAM_2, val2_new)
+            if result.get("status") != "updated":
+                val2_new = val2_old  # Не удалось записать
+        else:
+            val2_new = val2_old  # Нет смысла писать то же значение
+
+        # Проверяем, были ли изменения
+        updated = (val1_new != val1_old) or (val2_new != val2_old)
+
+        if updated:
+            stats["total_updated"] += 1
+            stats["total_swapped"] += 1
+            stats["results"].append(
+                {
+                    "id": level_id,
+                    "level_name": level.Name if hasattr(level, "Name") else "?",
+                    "status": "swapped",
+                    "reason": None,
+                    "val1_old": val1_old,
+                    "val2_old": val2_old,
+                    "val1_new": val1_new,
+                    "val2_new": val2_new,
                 }
             )
         else:
-            stats["skip_reasons"]["exception"] += 1
             stats["total_skipped"] += 1
             stats["results"].append(
                 {
                     "id": level_id,
                     "level_name": level.Name if hasattr(level, "Name") else "?",
                     "status": "skipped",
-                    "reason": reason,
+                    "reason": "no_change",
+                    "val1_old": val1_old,
+                    "val2_old": val2_old,
+                    "val1_new": val1_new,
+                    "val2_new": val2_new,
                 }
             )
 
@@ -218,9 +263,9 @@ def process_levels():
 
 
 def print_report(stats):
-    output.print_md("## Итоги копирования названий уровней")
+    output.print_md("## Итоги обмена значениями уровней")
     output.print_md(
-        "> Всего уровней: **{}** | Обновлено: **{}** | Пропущено: **{}**".format(
+        "> Всего уровней: **{}** | Обменено: **{}** | Пропущено: **{}**".format(
             stats["total_processed"], stats["total_updated"], stats["total_skipped"]
         )
     )
@@ -228,12 +273,11 @@ def print_report(stats):
     output.print_md("### Почему уровни пропускались")
     has_skips = False
     skip_labels = {
-        "source_empty": "Пустое значение в ДГП_Имя уровня",
-        "parameter_not_found": "Не найден целевой параметр",
+        "both_empty": "Оба параметра пустые",
+        "parameter_not_found": "Не найден параметр",
         "readonly": "Параметр только для чтения",
-        "already_ok": "Значение уже совпадает",
-        "wrong_storage_type": "Неверный тип параметра",
         "exception": "Ошибка при записи",
+        "no_change": "Значения уже одинаковые",
     }
     for reason, count in stats["skip_reasons"].items():
         if count > 0:
@@ -241,14 +285,21 @@ def print_report(stats):
             output.print_md(
                 "- **{}**: {}".format(skip_labels.get(reason, reason), count)
             )
+    if stats["skip_reasons"].get("no_change", 0) > 0:
+        has_skips = True
+        output.print_md(
+            "- **{}**: {}".format(
+                skip_labels["no_change"], stats["skip_reasons"]["no_change"]
+            )
+        )
     if not has_skips:
         output.print_md("- Пропусков нет")
 
     results_table = [
-        row for row in stats["results"] if row.get("status") in ["updated", "skipped"]
+        row for row in stats["results"] if row.get("status") in ["swapped", "skipped"]
     ]
     if results_table:
-        output.print_md("### Детали по уровням (обновленные и пропущенные)")
+        output.print_md("### Детали по уровням (обмененные и пропущенные)")
         output.print_md(
             '<div style="color: red; font-weight: bold;">Все ID кликабельные</div>'
         )
@@ -262,13 +313,26 @@ def print_report(stats):
         table_rows = []
         for r in results_table[:100]:
             status_label = {
-                "updated": "✓ Обновлено",
+                "swapped": "✓ Обменено",
                 "skipped": "✗ Пропущено",
             }.get(r.get("status", ""), to_unicode(r.get("status", "?")))
 
-            reason_label = skip_labels.get(
-                r.get("reason", ""), to_unicode(r.get("reason", "-"))
-            )
+            reason_label = skip_labels.get(r.get("reason", ""), "-")
+            if r.get("reason") == "no_change":
+                reason_label = skip_labels["no_change"]
+
+            val1_old = r.get("val1_old", "")
+            val2_old = r.get("val2_old", "")
+            val1_new = r.get("val1_new", "")
+            val2_new = r.get("val2_new", "")
+
+            # Формируем красивый вывод обмена
+            if r.get("status") == "swapped":
+                change1 = "{} → {}".format(val1_old, val1_new)
+                change2 = "{} → {}".format(val2_old, val2_new)
+            else:
+                change1 = val1_old
+                change2 = val2_old
 
             table_rows.append(
                 [
@@ -276,13 +340,22 @@ def print_report(stats):
                     r.get("level_name", "?"),
                     status_label,
                     reason_label,
+                    change1,
+                    change2,
                 ]
             )
 
         output.print_table(
             table_data=table_rows,
-            columns=["ID", "Уровень", "Результат", "Причина"],
-            formats=["{}", "{}", "{}", "{}"],
+            columns=[
+                "ID",
+                "Уровень",
+                "Результат",
+                "Причина",
+                "{} → {}".format(PARAM_1),
+                "{} → {}".format(PARAM_2),
+            ],
+            formats=["{}", "{}", "{}", "{}", "{}", "{}"],
         )
 
         if len(results_table) > 100:
@@ -295,7 +368,7 @@ def print_report(stats):
 
 
 def main():
-    t = DB.Transaction(doc, "ДГП Уровни")
+    t = DB.Transaction(doc, "ДГП Уровни: обмен значениями")
     t.Start()
     try:
         stats = process_levels()
