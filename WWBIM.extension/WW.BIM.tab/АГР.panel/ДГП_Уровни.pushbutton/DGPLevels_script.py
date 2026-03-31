@@ -85,13 +85,6 @@ def set_param_value(elem, param_name, value):
             "reason": "wrong_storage_type",
             "param": param_name,
         }
-    current = get_param_text(param)
-    if normalize_for_compare(current) == normalize_for_compare(value):
-        return {
-            "status": "already_ok",
-            "reason": "already_ok",
-            "param": param_name,
-        }
     try:
         param.Set(to_unicode(value))
         return {
@@ -145,7 +138,6 @@ def process_levels():
         "parameter_not_found": "Не найден параметр",
         "readonly": "Параметр только для чтения",
         "exception": "Ошибка при записи",
-        "no_change": "Значения уже одинаковые",
     }
 
     for level in levels:
@@ -221,18 +213,18 @@ def process_levels():
         ):
             result = set_param_value(level, PARAM_1, val1_new)
             if result.get("status") != "updated":
-                val1_new = val1_old
+                val1_new = val1_old  # Не удалось записать
         else:
-            val1_new = val1_old
+            val1_new = val1_old  # Нет смысла писать то же значение
 
         if param2_ok and normalize_for_compare(val2_old) != normalize_for_compare(
             val2_new
         ):
             result = set_param_value(level, PARAM_2, val2_new)
             if result.get("status") != "updated":
-                val2_new = val2_old
+                val2_new = val2_old  # Не удалось записать
         else:
-            val2_new = val2_old
+            val2_new = val2_old  # Нет смысла писать то же значение
 
         # Проверяем, были ли изменения
         updated = (val1_new != val1_old) or (val2_new != val2_old)
@@ -320,9 +312,11 @@ def print_report(stats):
 
         table_rows = []
         for r in results_table[:100]:
-            status_label = {"swapped": "✓ Обменено", "skipped": "✗ Пропущено"}.get(
-                r.get("status", ""), to_unicode(r.get("status", "?"))
-            )
+            status_label = {
+                "swapped": "✓ Обменено",
+                "skipped": "✗ Пропущено",
+            }.get(r.get("status", ""), to_unicode(r.get("status", "?")))
+
             reason_label = skip_labels.get(r.get("reason", ""), "-")
             if r.get("reason") == "no_change":
                 reason_label = skip_labels["no_change"]
@@ -332,6 +326,7 @@ def print_report(stats):
             val1_new = r.get("val1_new", "")
             val2_new = r.get("val2_new", "")
 
+            # Формируем красивый вывод обмена
             if r.get("status") == "swapped":
                 change1 = "{} → {}".format(val1_old, val1_new)
                 change2 = "{} → {}".format(val2_old, val2_new)

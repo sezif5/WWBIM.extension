@@ -1,0 +1,9 @@
+title: 
+  ru: "ДГП\nКод МССК"
+  en_us: "Change\nManager"
+tooltip: Заполнение параметров ДГП_Наименование элемента МССК и ДГП_Код элемента МССК из Excel
+author: "Vlad"
+context: doc-project
+assembly: VisualClassification.dll
+command: VisualClassification.ExternalCommand
+

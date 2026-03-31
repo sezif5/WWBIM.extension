@@ -33,6 +33,14 @@ PARAM_TARGET_CODE = u"ДГП_Код помещения и зоны МССК"
 PARAM_TARGET_NAME = u"ДГП_Наименование помещения и зоны МССК"
 PARAM_TARGET_PROJECT_NAME = u"ДГП_Наименование проекта"
 PARAM_TARGET_PROJECT_ADDRESS = u"ДГП_Адрес"
+PARAM_TARGET_UNDERGROUND = u"ДГП_Подземный этаж"
+PARAM_TARGET_NAME_ROOM = u"ДГП_Наименование"
+PARAM_TARGET_GROUP_ROOM = u"ДГП_Группа помещений"
+PARAM_TARGET_NUM_GROUP = u"ДГП_Номер группы помещений"
+PARAM_TARGET_NUM_ROOM = u"ДГП_Номер помещения"
+PARAM_TARGET_FUNC_ZONE = u"ДГП_Категория функциональной зоны"
+PARAM_TARGET_BUILDING_NUM = u"ДГП_Номер объекта (корпуса)"
+PARAM_TARGET_SECTION_NUM = u"ДГП_Номер подобъекта (секции)"
 
 PARAM_SOURCE_AREA = u"Площадь"
 PARAM_SOURCE_AREA_COEF = u"ADSK_Площадь с коэффициентом"
@@ -42,6 +50,11 @@ PARAM_SOURCE_DIAMETER = u"ADSK_Размер_Диаметр"
 PARAM_SOURCE_THICKNESS = u"Толщина"
 PARAM_SOURCE_PROJECT_NAME = u"Наименование проекта"
 PARAM_SOURCE_PROJECT_ADDRESS = u"Адрес проекта"
+PARAM_SOURCE_PURPOSE = u"Назначение"
+PARAM_SOURCE_FLAT_NUM = u"ADSK_Номер квартиры"
+PARAM_SOURCE_ROOM_NUM = u"ADSK_Номер помещения квартиры"
+PARAM_SOURCE_BUILDING_NUM = u"ADSK_Номер здания"
+PARAM_SOURCE_SECTION_NUM = u"ADSK_Номер секции"
 
 
 # ============================================================================
@@ -192,6 +205,28 @@ def resolve_text(elem, source_spec):
     if source_spec.startswith(u"const:"):
         return source_spec[6:]
 
+    if source_spec.startswith(u"cond:"):
+        rest = source_spec[5:]
+        eq_pos = rest.find(u"=")
+        qm_pos = rest.find(u"?", eq_pos + 1 if eq_pos >= 0 else 0)
+        col_pos = rest.find(u":", qm_pos + 1 if qm_pos >= 0 else 0)
+        if eq_pos < 0 or qm_pos < 0 or col_pos < 0:
+            return None
+        param_name = rest[:eq_pos]
+        check_value = rest[eq_pos + 1:qm_pos]
+        value_yes = rest[qm_pos + 1:col_pos]
+        value_no = rest[col_pos + 1:]
+
+        p = get_param(elem, param_name)
+        if p is None:
+            p = get_type_param(elem, param_name)
+        val = get_param_text(p)
+        if not val:
+            return None
+        if normalize_for_compare(val) == normalize_for_compare(check_value):
+            return value_yes
+        return value_no
+
     use_type = source_spec.startswith(u"type:")
     name = source_spec[5:] if use_type else source_spec
 
@@ -229,6 +264,27 @@ def should_write_number(current, expected):
         return abs(float(current) - float(expected)) > 1e-9
     except Exception:
         return True
+
+
+UNDERGROUND_LEVEL_RE = re.compile(ur"-(0[1-9]|10)(?!\d)")
+
+def is_underground_level(level_name):
+    if not level_name:
+        return False
+    return bool(UNDERGROUND_LEVEL_RE.search(to_unicode(level_name)))
+
+
+def get_level_name(elem):
+    try:
+        level_id = elem.LevelId
+        if not level_id or level_id == DB.ElementId.InvalidElementId:
+            return None
+        level = doc.GetElement(level_id)
+        if level:
+            return level.Name
+    except Exception:
+        pass
+    return None
 
 
 def get_group_value_for_rule(elem, cat_bic):
@@ -307,8 +363,6 @@ def set_param_from_assignment(elem, assignment, missing_adsk_callback=None):
                 u"target": target_name,
                 u"source": source_spec,
             }
-            if missing_adsk_callback:
-                missing_adsk_callback(elem, param_to_check)
             return result
 
     target = get_param(elem, target_name)
@@ -366,7 +420,7 @@ def set_param_from_assignment(elem, assignment, missing_adsk_callback=None):
     # Числовые параметры
     if st == DB.StorageType.Double:
         expected = resolve_number(elem, source_spec)
-        if expected is None:
+        if expected is None or expected == 0.0:
             return {
                 u"status": u"skipped",
                 u"reason": u"source_empty",
@@ -432,6 +486,8 @@ RULES = [
         u"category": DB.BuiltInCategory.OST_Floors,
         u"assignments": [
             {u"target": PARAM_TARGET_THICKNESS, u"source": u"type:" + PARAM_SOURCE_THICKNESS},
+            {u"target": PARAM_TARGET_BUILDING_NUM, u"source": PARAM_SOURCE_BUILDING_NUM},
+            {u"target": PARAM_TARGET_SECTION_NUM, u"source": PARAM_SOURCE_SECTION_NUM},
         ],
     },
 
@@ -442,16 +498,20 @@ RULES = [
         u"assignments": [
             {u"target": PARAM_TARGET_HEIGHT, u"source": PARAM_SOURCE_HEIGHT},
             {u"target": PARAM_TARGET_WIDTH, u"source": PARAM_SOURCE_WIDTH},
+            {u"target": PARAM_TARGET_BUILDING_NUM, u"source": PARAM_SOURCE_BUILDING_NUM},
+            {u"target": PARAM_TARGET_SECTION_NUM, u"source": PARAM_SOURCE_SECTION_NUM},
         ],
     },
 
-    # Стена - Заполнение оконных проёмов
+    # Стена - Заполнение витражных проёмов
     {
         u"category": DB.BuiltInCategory.OST_Walls,
-        u"group": u"Заполнение оконных проёмов",
+        u"group": u"Заполнение витражных проёмов",
         u"assignments": [
             {u"target": PARAM_TARGET_HEIGHT, u"source": PARAM_SOURCE_HEIGHT},
             {u"target": PARAM_TARGET_WIDTH, u"source": PARAM_SOURCE_WIDTH},
+            {u"target": PARAM_TARGET_BUILDING_NUM, u"source": PARAM_SOURCE_BUILDING_NUM},
+            {u"target": PARAM_TARGET_SECTION_NUM, u"source": PARAM_SOURCE_SECTION_NUM},
         ],
     },
 
@@ -461,6 +521,8 @@ RULES = [
         u"group": u"Фасад",
         u"assignments": [
             {u"target": PARAM_TARGET_THICKNESS, u"source": u"type:" + PARAM_SOURCE_THICKNESS},
+            {u"target": PARAM_TARGET_BUILDING_NUM, u"source": PARAM_SOURCE_BUILDING_NUM},
+            {u"target": PARAM_TARGET_SECTION_NUM, u"source": PARAM_SOURCE_SECTION_NUM},
         ],
     },
 
@@ -469,6 +531,8 @@ RULES = [
         u"category": DB.BuiltInCategory.OST_Walls,
         u"assignments": [
             {u"target": PARAM_TARGET_THICKNESS, u"source": u"type:" + PARAM_SOURCE_THICKNESS},
+            {u"target": PARAM_TARGET_BUILDING_NUM, u"source": PARAM_SOURCE_BUILDING_NUM},
+            {u"target": PARAM_TARGET_SECTION_NUM, u"source": PARAM_SOURCE_SECTION_NUM},
         ],
     },
 
@@ -479,6 +543,8 @@ RULES = [
         u"assignments": [
             {u"target": PARAM_TARGET_HEIGHT, u"source": PARAM_SOURCE_HEIGHT},
             {u"target": PARAM_TARGET_WIDTH, u"source": PARAM_SOURCE_WIDTH},
+            {u"target": PARAM_TARGET_BUILDING_NUM, u"source": PARAM_SOURCE_BUILDING_NUM},
+            {u"target": PARAM_TARGET_SECTION_NUM, u"source": PARAM_SOURCE_SECTION_NUM},
         ],
     },
 
@@ -489,6 +555,8 @@ RULES = [
             {u"target": PARAM_TARGET_HEIGHT, u"source": PARAM_SOURCE_HEIGHT},
             {u"target": PARAM_TARGET_WIDTH, u"source": PARAM_SOURCE_WIDTH},
             {u"target": PARAM_TARGET_DIAMETER, u"source": PARAM_SOURCE_DIAMETER},
+            {u"target": PARAM_TARGET_BUILDING_NUM, u"source": PARAM_SOURCE_BUILDING_NUM},
+            {u"target": PARAM_TARGET_SECTION_NUM, u"source": PARAM_SOURCE_SECTION_NUM},
         ],
     },
 
@@ -497,6 +565,13 @@ RULES = [
         u"category": DB.BuiltInCategory.OST_Rooms,
         u"assignments": [
             {u"target": PARAM_TARGET_AREA, u"source": PARAM_SOURCE_AREA_COEF},
+            {u"target": PARAM_TARGET_NAME_ROOM, u"source": u"Имя"},
+            {u"target": PARAM_TARGET_GROUP_ROOM, u"source": PARAM_SOURCE_PURPOSE},
+            {u"target": PARAM_TARGET_NUM_GROUP, u"source": PARAM_SOURCE_FLAT_NUM},
+            {u"target": PARAM_TARGET_NUM_ROOM, u"source": PARAM_SOURCE_ROOM_NUM},
+            {u"target": PARAM_TARGET_FUNC_ZONE, u"source": u"cond:" + PARAM_SOURCE_PURPOSE + u"=Квартира?Жилая зона:Нежилая зона"},
+            {u"target": PARAM_TARGET_BUILDING_NUM, u"source": PARAM_SOURCE_BUILDING_NUM},
+            {u"target": PARAM_TARGET_SECTION_NUM, u"source": PARAM_SOURCE_SECTION_NUM},
         ],
     },
 
@@ -508,6 +583,8 @@ RULES = [
             {u"target": PARAM_TARGET_CODE, u"source": u"const:9999"},
             {u"target": PARAM_TARGET_NAME, u"source": u"const:9999"},
             {u"target": PARAM_TARGET_AREA, u"source": PARAM_SOURCE_AREA},
+            {u"target": PARAM_TARGET_BUILDING_NUM, u"source": PARAM_SOURCE_BUILDING_NUM},
+            {u"target": PARAM_TARGET_SECTION_NUM, u"source": PARAM_SOURCE_SECTION_NUM},
         ],
     },
     {
@@ -517,6 +594,8 @@ RULES = [
             {u"target": PARAM_TARGET_CODE, u"source": u"const:П3 03"},
             {u"target": PARAM_TARGET_NAME, u"source": u"const:9999"},
             {u"target": PARAM_TARGET_AREA, u"source": PARAM_SOURCE_AREA},
+            {u"target": PARAM_TARGET_BUILDING_NUM, u"source": PARAM_SOURCE_BUILDING_NUM},
+            {u"target": PARAM_TARGET_SECTION_NUM, u"source": PARAM_SOURCE_SECTION_NUM},
         ],
     },
 
@@ -535,7 +614,8 @@ def process_elements():
     stats = {
         u"total_processed": 0,
         u"total_updated": 0,
-        u"total_skipped": 0,
+        u"total_already_ok": 0,
+        u"total_problems": 0,
         u"by_category": {},
         u"skip_reasons": {
             u"parameter_not_found": 0,
@@ -552,6 +632,7 @@ def process_elements():
         u"debug_samples": [],
         u"no_rule_samples": [],
         u"missing_adsk_samples": [],
+        u"underground_samples": [],
     }
 
     def touch_target(target_name):
@@ -574,9 +655,14 @@ def process_elements():
             elem_id = elem.Id.IntegerValue
         except Exception:
             elem_id = -1
+        try:
+            type_id = elem.GetTypeId().IntegerValue
+        except Exception:
+            type_id = -1
         stats[u"debug_samples"].append(
             {
                 u"id": elem_id,
+                u"type_id": type_id,
                 u"category": cat_name,
                 u"target": result.get(u"target"),
                 u"source": result.get(u"source"),
@@ -586,13 +672,16 @@ def process_elements():
         )
 
     def add_missing_adsk_sample(elem, missing_param):
-        """Добавляет элемент без ADSK_Размер_ параметра в статистику."""
         if len(stats[u"missing_adsk_samples"]) >= 200:
             return
         try:
             elem_id = elem.Id.IntegerValue
         except Exception:
             elem_id = -1
+        try:
+            type_id = elem.GetTypeId().IntegerValue
+        except Exception:
+            type_id = -1
         try:
             cat_name = to_unicode(elem.Category.Name)
         except Exception:
@@ -601,8 +690,31 @@ def process_elements():
             {
                 u"elem": elem,
                 u"id": elem_id,
+                u"type_id": type_id,
                 u"category": cat_name,
                 u"missing_param": missing_param,
+            }
+        )
+
+    def add_underground_sample(elem, cat_name, status, level_name=None, error=None):
+        if len(stats[u"underground_samples"]) >= 200:
+            return
+        try:
+            elem_id = elem.Id.IntegerValue
+        except Exception:
+            elem_id = -1
+        try:
+            type_id = elem.GetTypeId().IntegerValue
+        except Exception:
+            type_id = -1
+        stats[u"underground_samples"].append(
+            {
+                u"id": elem_id,
+                u"type_id": type_id,
+                u"category": cat_name,
+                u"status": status,
+                u"level_name": level_name,
+                u"error": error,
             }
         )
 
@@ -646,11 +758,12 @@ def process_elements():
 
     for category in categories:
         try:
-            cat_name = to_unicode(category).replace(u"OST_", u"")
+            cat_obj = DB.Category.GetCategory(doc, category)
+            cat_name = to_unicode(cat_obj.Name) if cat_obj else to_unicode(category)
         except Exception:
             cat_name = to_unicode(category)
 
-        stats[u"by_category"][cat_name] = {u"processed": 0, u"updated": 0, u"skipped": 0}
+        stats[u"by_category"][cat_name] = {u"processed": 0, u"updated": 0, u"already_ok": 0, u"problems": 0}
 
         try:
             elements = (
@@ -675,13 +788,17 @@ def process_elements():
                         add_missing_adsk_sample(elem, adsk_name)
 
                 stats[u"skip_reasons"][u"no_rule"] += 1
-                stats[u"total_skipped"] += 1
-                stats[u"by_category"][cat_name][u"skipped"] += 1
+                stats[u"total_problems"] += 1
+                stats[u"by_category"][cat_name][u"problems"] += 1
                 if len(stats[u"no_rule_samples"]) < 60:
                     try:
                         elem_id = elem.Id.IntegerValue
                     except Exception:
                         elem_id = -1
+                    try:
+                        type_id = elem.GetTypeId().IntegerValue
+                    except Exception:
+                        type_id = -1
                     try:
                         actual_cat_id = elem.Category.Id.IntegerValue
                     except Exception:
@@ -690,6 +807,7 @@ def process_elements():
                     stats[u"no_rule_samples"].append(
                         {
                             u"id": elem_id,
+                            u"type_id": type_id,
                             u"category": cat_name,
                             u"actual_group": to_unicode(actual_group),
                             u"expected": expected_rules_for_category(category),
@@ -698,6 +816,8 @@ def process_elements():
                 continue
 
             elem_updated = False
+            elem_already_ok = True
+            elem_has_problem = False
             for assignment in rule.get(u"assignments", []):
                 result = set_param_from_assignment(elem, assignment, add_missing_adsk_sample)
                 status = result.get(u"status")
@@ -709,6 +829,7 @@ def process_elements():
 
                 if status == u"updated":
                     elem_updated = True
+                    elem_already_ok = False
                     if target_name:
                         stats[u"by_target"][target_name][u"updated"] += 1
                 elif status == u"already_ok":
@@ -717,18 +838,117 @@ def process_elements():
                         stats[u"by_target"][target_name][u"already_ok"] += 1
                 elif reason in stats[u"skip_reasons"]:
                     stats[u"skip_reasons"][reason] += 1
+                    elem_already_ok = False
+                    elem_has_problem = True
                     if target_name and reason in stats[u"by_target"][target_name]:
                         stats[u"by_target"][target_name][reason] += 1
                     add_sample(elem, cat_name, result)
                 else:
+                    elem_already_ok = False
+                    elem_has_problem = True
                     add_sample(elem, cat_name, result)
 
             if elem_updated:
                 stats[u"total_updated"] += 1
                 stats[u"by_category"][cat_name][u"updated"] += 1
-            else:
-                stats[u"total_skipped"] += 1
-                stats[u"by_category"][cat_name][u"skipped"] += 1
+            elif elem_already_ok:
+                stats[u"total_already_ok"] += 1
+                stats[u"by_category"][cat_name][u"already_ok"] += 1
+            elif elem_has_problem:
+                stats[u"total_problems"] += 1
+                stats[u"by_category"][cat_name][u"problems"] += 1
+
+            if category in (DB.BuiltInCategory.OST_Rooms, DB.BuiltInCategory.OST_Areas):
+                level_name = get_level_name(elem)
+                is_underground = is_underground_level(level_name)
+                target_param = get_param(elem, PARAM_TARGET_UNDERGROUND)
+                
+                touch_target(PARAM_TARGET_UNDERGROUND)
+                
+                if target_param is None:
+                    add_underground_sample(elem, cat_name, u"parameter_not_found", level_name)
+                    stats[u"by_target"][PARAM_TARGET_UNDERGROUND][u"parameter_not_found"] += 1
+                elif target_param.IsReadOnly:
+                    add_underground_sample(elem, cat_name, u"readonly", level_name)
+                    stats[u"by_target"][PARAM_TARGET_UNDERGROUND][u"readonly"] += 1
+                elif target_param.StorageType != DB.StorageType.Integer:
+                    add_underground_sample(elem, cat_name, u"wrong_storage_type", level_name)
+                    stats[u"by_target"][PARAM_TARGET_UNDERGROUND][u"wrong_storage_type"] += 1
+                else:
+                    try:
+                        expected_val = 1 if is_underground else 0
+                        if not target_param.HasValue:
+                            target_param.Set(expected_val)
+                            stats[u"by_target"][PARAM_TARGET_UNDERGROUND][u"updated"] += 1
+                        elif target_param.AsInteger() != expected_val:
+                            target_param.Set(expected_val)
+                            stats[u"by_target"][PARAM_TARGET_UNDERGROUND][u"updated"] += 1
+                        else:
+                            stats[u"by_target"][PARAM_TARGET_UNDERGROUND][u"already_ok"] += 1
+                    except Exception as e:
+                        add_underground_sample(elem, cat_name, u"exception", level_name, to_unicode(e))
+                        stats[u"by_target"][PARAM_TARGET_UNDERGROUND][u"exception"] += 1
+
+            if category == DB.BuiltInCategory.OST_Areas:
+                scheme_name = None
+                try:
+                    scheme = elem.AreaScheme
+                    if scheme and scheme.Name:
+                        scheme_name = to_unicode(scheme.Name)
+                except Exception:
+                    pass
+
+                target_param = get_param(elem, PARAM_TARGET_FUNC_ZONE)
+                touch_target(PARAM_TARGET_FUNC_ZONE)
+
+                if target_param is None:
+                    add_sample(elem, cat_name, {
+                        u"target": PARAM_TARGET_FUNC_ZONE,
+                        u"source": u"AreaScheme.Name",
+                        u"status": u"skipped",
+                        u"reason": u"parameter_not_found",
+                    })
+                    stats[u"by_target"][PARAM_TARGET_FUNC_ZONE][u"parameter_not_found"] += 1
+                elif target_param.IsReadOnly:
+                    add_sample(elem, cat_name, {
+                        u"target": PARAM_TARGET_FUNC_ZONE,
+                        u"source": u"AreaScheme.Name",
+                        u"status": u"skipped",
+                        u"reason": u"readonly",
+                    })
+                    stats[u"by_target"][PARAM_TARGET_FUNC_ZONE][u"readonly"] += 1
+                elif target_param.StorageType != DB.StorageType.String:
+                    add_sample(elem, cat_name, {
+                        u"target": PARAM_TARGET_FUNC_ZONE,
+                        u"source": u"AreaScheme.Name",
+                        u"status": u"skipped",
+                        u"reason": u"wrong_storage_type",
+                    })
+                    stats[u"by_target"][PARAM_TARGET_FUNC_ZONE][u"wrong_storage_type"] += 1
+                elif not scheme_name:
+                    add_sample(elem, cat_name, {
+                        u"target": PARAM_TARGET_FUNC_ZONE,
+                        u"source": u"AreaScheme.Name",
+                        u"status": u"skipped",
+                        u"reason": u"source_empty",
+                    })
+                    stats[u"by_target"][PARAM_TARGET_FUNC_ZONE][u"source_empty"] += 1
+                else:
+                    try:
+                        current = target_param.AsString()
+                        if not should_write_text(current, scheme_name):
+                            stats[u"by_target"][PARAM_TARGET_FUNC_ZONE][u"already_ok"] += 1
+                        else:
+                            target_param.Set(scheme_name)
+                            stats[u"by_target"][PARAM_TARGET_FUNC_ZONE][u"updated"] += 1
+                    except Exception as e:
+                        add_sample(elem, cat_name, {
+                            u"target": PARAM_TARGET_FUNC_ZONE,
+                            u"source": u"AreaScheme.Name",
+                            u"status": u"skipped",
+                            u"reason": u"exception",
+                        })
+                        stats[u"by_target"][PARAM_TARGET_FUNC_ZONE][u"exception"] += 1
 
     return stats
 
@@ -744,15 +964,39 @@ def print_report(stats):
         u"no_rule": u"Не найдено подходящее правило",
         u"missing_adsk_param": u"Отсутствует параметр ADSK_Размер_",
     }
-    status_labels = {
-        u"updated": u"Обновлено",
-        u"already_ok": u"Без изменений",
-        u"skipped": u"Пропущено",
+    situation_labels = {
         u"parameter_not_found": u"Параметр не найден",
+        u"source_empty": u"Источник пуст",
         u"readonly": u"Только чтение",
         u"wrong_storage_type": u"Неверный тип",
-        u"exception": u"Ошибка",
+        u"exception": u"Ошибка записи",
+        u"missing_adsk_param": u"Нет ADSK параметра",
+        u"invalid_assignment": u"Ошибка правила",
     }
+
+    def format_detail(s):
+        reason = s.get(u"reason") or s.get(u"status")
+        target = s.get(u"target", u"?")
+        source = s.get(u"source", u"?")
+        if reason == u"parameter_not_found":
+            return u"У элемента отсутствует параметр «{}». Проверьте, что он добавлен в проект.".format(target)
+        if reason == u"source_empty":
+            src_display = source[5:] if source.startswith(u"type:") else source
+            return u"Исходный параметр «{}» пуст — нечем заполнить «{}».".format(src_display, target)
+        if reason == u"readonly":
+            return u"Параметр «{}» заблокирован для записи (только чтение).".format(target)
+        if reason == u"wrong_storage_type":
+            return u"Параметр «{}» имеет неверный тип данных.".format(target)
+        if reason == u"exception":
+            err_text = s.get(u"reason") or u""
+            if err_text and err_text not in (u"exception",):
+                return u"Не удалось записать в «{}»: {}".format(target, err_text)
+            return u"Не удалось записать в «{}».".format(target)
+        if reason == u"missing_adsk_param":
+            return u"У элемента отсутствует параметр «{}». Его нужно добавить в семейство.".format(source)
+        if reason == u"invalid_assignment":
+            return u"Внутренняя ошибка настройки правила."
+        return u"Куда: «{}» | Откуда: «{}»".format(target, source)
 
     def make_id_link(elem_id):
         try:
@@ -764,8 +1008,8 @@ def print_report(stats):
 
     output.print_md(u"## Итоги заполнения ДГП")
     output.print_md(
-        u"> Всего элементов: **{}** | Успешно заполнено: **{}** | Пропущено: **{}**".format(
-            stats[u"total_processed"], stats[u"total_updated"], stats[u"total_skipped"]
+        u"> Всего элементов: **{}** | Заполнено: **{}** | Уже заполнено: **{}** | С проблемами: **{}**".format(
+            stats[u"total_processed"], stats[u"total_updated"], stats[u"total_already_ok"], stats[u"total_problems"]
         )
     )
 
@@ -782,23 +1026,26 @@ def print_report(stats):
                 cat_name,
                 cat_stats.get(u"processed", 0),
                 cat_stats.get(u"updated", 0),
-                cat_stats.get(u"skipped", 0),
+                cat_stats.get(u"already_ok", 0),
+                cat_stats.get(u"problems", 0),
             ]
         )
     output.print_table(
         table_data=category_rows,
-        columns=[u"Категория", u"Обработано", u"Заполнено", u"Пропущено"],
-        formats=[u"{}", u"{}", u"{}", u"{}"],
+        columns=[u"Категория", u"Обработано", u"Заполнено", u"Уже заполнено", u"С проблемами"],
+        formats=[u"{}", u"{}", u"{}", u"{}", u"{}"],
     )
 
-    output.print_md(u"### Почему элементы пропускались")
-    has_skips = False
+    output.print_md(u"### Причины проблем")
+    has_problems = False
     for reason, count in stats[u"skip_reasons"].items():
+        if reason == u"already_ok":
+            continue
         if count > 0:
-            has_skips = True
+            has_problems = True
             output.print_md(u"- **{}**: {}".format(skip_labels.get(reason, reason), count))
-    if not has_skips:
-        output.print_md(u"- Пропусков нет")
+    if not has_problems:
+        output.print_md(u"- Проблем не обнаружено")
 
     output.print_md(u"### Как заполнялись целевые параметры")
     if not stats[u"by_target"]:
@@ -823,8 +1070,13 @@ def print_report(stats):
 
     # Единый раздел проблем: объединяем no_rule + debug + missing ADSK
     problem_rows = []
+    seen_problems = set()
 
     for s in stats.get(u"no_rule_samples", []):
+        key = (u"no_rule", s.get(u"type_id", -1))
+        if key in seen_problems:
+            continue
+        seen_problems.add(key)
         problem_rows.append([
             make_id_link(s.get(u"id", u"?")),
             s.get(u"category", u"?"),
@@ -836,23 +1088,48 @@ def print_report(stats):
         ])
 
     for s in stats.get(u"debug_samples", []):
+        reason = s.get(u"reason") or s.get(u"status")
+        key = (u"debug", s.get(u"type_id", -1), s.get(u"target"), reason)
+        if key in seen_problems:
+            continue
+        seen_problems.add(key)
         problem_rows.append([
             make_id_link(s.get(u"id", u"?")),
             s.get(u"category", u"?"),
-            status_labels.get(s.get(u"status", u""), to_unicode(s.get(u"status", u"?"))),
-            u"Куда: '{}' | Откуда: '{}' | Причина: '{}'".format(
-                s.get(u"target", u"?"),
-                s.get(u"source", u"?"),
-                skip_labels.get(s.get(u"reason", u""), to_unicode(s.get(u"reason", u"-"))),
-            ),
+            situation_labels.get(reason, to_unicode(reason or u"?")),
+            format_detail(s),
         ])
 
     for s in stats.get(u"missing_adsk_samples", []):
+        key = (u"missing_adsk", s.get(u"type_id", -1), s.get(u"missing_param"))
+        if key in seen_problems:
+            continue
+        seen_problems.add(key)
         problem_rows.append([
             make_id_link(s.get(u"id", u"?")),
             s.get(u"category", u"?"),
             u"Нет ADSK_Размер_",
             u"Не найден параметр: '{}'".format(s.get(u"missing_param", u"?")),
+        ])
+
+    underground_status_labels = {
+        u"parameter_not_found": u"Параметр ДГП_Подземный этаж не найден",
+        u"readonly": u"Параметр ДГП_Подземный этаж только для чтения",
+        u"wrong_storage_type": u"Параметр ДГП_Подземный этаж не Integer",
+        u"exception": u"Ошибка записи ДГП_Подземный этаж",
+    }
+    for s in stats.get(u"underground_samples", []):
+        key = (u"underground", s.get(u"type_id", -1), s.get(u"status"))
+        if key in seen_problems:
+            continue
+        seen_problems.add(key)
+        level_info = u"Уровень: '{}'".format(s.get(u"level_name", u"?")) if s.get(u"level_name") else u"Уровень не определён"
+        error_info = u" | Ошибка: {}".format(s.get(u"error")) if s.get(u"error") else u""
+        problem_rows.append([
+            make_id_link(s.get(u"id", u"?")),
+            s.get(u"category", u"?"),
+            underground_status_labels.get(s.get(u"status", u""), to_unicode(s.get(u"status", u"?"))),
+            u"{}{}".format(level_info, error_info),
         ])
 
     if problem_rows:
