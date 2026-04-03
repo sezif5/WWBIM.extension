@@ -258,7 +258,21 @@ def ParseLevelName(level_name):
         floor_num = match.group(1)
         return str(int(floor_num))
 
+    pattern = r"^SIM_\d+_(-?\d+)_"
+    match = re.search(pattern, level_name)
+
+    if match:
+        floor_num = match.group(1)
+        return str(int(floor_num))
+
     pattern = r"^KR_(-?\d+)_"
+    match = re.search(pattern, level_name)
+
+    if match:
+        floor_num = match.group(1)
+        return str(int(floor_num))
+
+    pattern = r"^\d+_KR_(\d+)_\d+"
     match = re.search(pattern, level_name)
 
     if match:

@@ -276,7 +276,7 @@ def get_workset_status(doc):
 
 
 def action_open_models(models):
-    """Открыть выбранные модели с созданием локальной копии."""
+    """Открыть выбранные модели с созданием локальной копии пользователя."""
     from Autodesk.Revit.DB import OpenOptions
 
     out.print_md("## ОТКРЫТИЕ МОДЕЛЕЙ ({})".format(len(models)))
@@ -284,198 +284,77 @@ def action_open_models(models):
     out.print_md("---")
 
     uiapp = __revit__
-    app = uiapp.Application
+    success_models = 0
 
-    for i, model_path in enumerate(models):
-        model_name = os.path.basename(model_path)
-        out.print_md(":open_file_folder: **{}**".format(model_name))
+    dialog_suppressor = openbg.DialogSuppressor()
+    dialog_suppressor.attach(uiapp)
 
-        mp = to_model_path(model_path)
-        if mp is None:
-            out.print_md(":x: Не удалось преобразовать путь.")
-            out.update_progress(i + 1, len(models))
-            continue
+    try:
+        for i, model_path in enumerate(models):
+            model_name = os.path.basename(model_path)
+            out.print_md(":open_file_folder: **{}**".format(model_name))
 
-        dialog_suppressor = None
+            mp = to_model_path(model_path)
+            if mp is None:
+                out.print_md(":x: Не удалось преобразовать путь.")
+                out.update_progress(i + 1, len(models))
+                continue
 
-        try:
-            result = openbg.open_in_background(
-                __revit__,
-                None,
-                mp,
-                audit=False,
-                worksets=("all_except_prefixes", ["00_", "Связь", "Links"]),
-                detach=False,
-                suppress_warnings=True,
-                suppress_dialogs=True,
-            )
-            if len(result) >= 3:
-                doc = result[0]
-                dialog_suppressor = result[2]
-            else:
-                raise Exception("openbg не вернул документ")
-
-            dialog_summary = dialog_suppressor.get_summary()
-            out.print_md(
-                "  dialogs: total={}, suppressed={}, unknown={}, errors={}".format(
-                    dialog_summary.get("total", 0),
-                    dialog_summary.get("suppressed", 0),
-                    dialog_summary.get("unknown", 0),
-                    dialog_summary.get("errors", 0),
-                )
-            )
-            if dialog_summary.get("transmitted_dialog_handled"):
-                out.print_md("  :white_check_mark: transmitted_dialog_handled")
-            if dialog_summary.get("unknown", 0) > 0:
-                unknown = dialog_summary.get("unknown_details", [])[:3]
-                for uid, snippet in unknown:
-                    out.print_md("  unknown_dialog: [{}] {}".format(uid, snippet[:50]))
-
-            out.print_md(
-                "  doc: workshared={}, readonly={}, path={}".format(
-                    doc.IsWorkshared,
-                    doc.IsReadOnly,
-                    os.path.basename(doc.PathName) if doc.PathName else "None",
-                )
-            )
-
-            if doc.IsWorkshared:
-                ws_status = get_workset_status(doc)
-                if ws_status:
-                    out.print_md(
-                        "  worksets: total={}, open={}, closed={}".format(
-                            ws_status["total"],
-                            ws_status["open_count"],
-                            ws_status["closed_count"],
-                        )
-                    )
-                    out.print_md(
-                        "  active_workset: {}".format(ws_status["active_workset"])
-                    )
-                    if ws_status["open_names"]:
-                        open_str = ", ".join(ws_status["open_names"])
-                        out.print_md("  open_worksets: {}".format(open_str))
-                    if ws_status["closed_names"]:
-                        closed_str = ", ".join(ws_status["closed_names"])
-                        out.print_md("  closed_worksets: {}".format(closed_str))
-
-            # Загрузить все выбранные семейства
-            loaded_count = 0
-            from Autodesk.Revit.DB import Transaction
-
-            t = Transaction(doc, "Загрузка семейств")
-            t.Start()
             try:
-                for family_doc in family_docs:
-                    try:
-                        loaded_family = doc.LoadFamily(family_doc)
-                        if loaded_family:
-                            loaded_count += 1
-                    except Exception:
-                        pass
-                t.Commit()
+                cfg = openbg._build_ws_config(
+                    uiapp, mp, ("all_except_prefixes", ["00_", "Связь", "Links"])
+                )
 
-                if loaded_count == len(family_docs):
-                    out.print_md(
-                        ":white_check_mark: Загружено семейств: {}/{}".format(
-                            loaded_count, len(family_docs)
-                        )
+                opts = OpenOptions()
+                opts.SetOpenWorksetsConfiguration(cfg)
+
+                uiapp.OpenAndActivateDocument(mp, opts, False)
+
+                doc = uiapp.ActiveUIDocument.Document
+
+                out.print_md(
+                    "  doc: workshared={}, readonly={}, path={}".format(
+                        doc.IsWorkshared,
+                        doc.IsReadOnly,
+                        os.path.basename(doc.PathName) if doc.PathName else "None",
                     )
-                    success_models += 1
-                elif loaded_count > 0:
-                    out.print_md(
-                        ":warning: Загружено семейств: {}/{} (остальные уже существуют)".format(
-                            loaded_count, len(family_docs)
+                )
+
+                if doc.IsWorkshared:
+                    ws_status = get_workset_status(doc)
+                    if ws_status:
+                        out.print_md(
+                            "  worksets: total={}, open={}, closed={}".format(
+                                ws_status["total"],
+                                ws_status["open_count"],
+                                ws_status["closed_count"],
+                            )
                         )
-                    )
-                    success_models += 1
-                else:
-                    out.print_md(":warning: Семейства уже существуют или не загружены")
+                        out.print_md(
+                            "  active_workset: {}".format(ws_status["active_workset"])
+                        )
+                        if ws_status["open_names"]:
+                            open_str = ", ".join(ws_status["open_names"])
+                            out.print_md("  open_worksets: {}".format(open_str))
+                        if ws_status["closed_names"]:
+                            closed_str = ", ".join(ws_status["closed_names"])
+                            out.print_md(
+                                "  closed_worksets: {}".format(closed_str)
+                            )
+
+                success_models += 1
 
             except Exception as e:
-                t.RollBack()
-                out.print_md(":x: Ошибка загрузки: `{}`".format(e))
+                out.print_md(":x: Ошибка открытия: `{}`".format(e))
 
-            # Выводим информацию о диалогах после операции
-            dialog_summary_after = dialog_suppressor.get_summary()
-            suppressed_brief = dialog_summary_after.get("suppressed_dialogs_brief", [])
-            if suppressed_brief:
-                out.print_md("  suppressed_dialogs: {}".format(len(suppressed_brief)))
-                for d in suppressed_brief:
-                    out.print_md("    - DialogId: {}".format(d.get("dialog_id", "")))
-                    out.print_md("      Type: {}".format(d.get("type", "")))
-                    out.print_md("      TypeFull: {}".format(d.get("type_full", "")))
-                    out.print_md("      Title: {}".format(d.get("title", "")))
-                    out.print_md(
-                        "      MainInstruction: {}".format(
-                            d.get("main_instruction", "")
-                        )
-                    )
-                    out.print_md("      Message: {}".format(d.get("message", "")))
-                    out.print_md(
-                        "      ExpandedContent: {}".format(
-                            d.get("expanded_content", "")
-                        )
-                    )
-                    all_props = d.get("all_string_props", {})
-                    if all_props:
-                        out.print_md("      AllStringProps:")
-                        for prop_name, prop_value in all_props.items():
-                            out.print_md(
-                                "        - {}: {}".format(
-                                    prop_name,
-                                    prop_value[:100]
-                                    if len(str(prop_value)) > 100
-                                    else prop_value,
-                                )
-                            )
-                    out.print_md("      Action: {}".format(d.get("action", "")))
+            out.update_progress(i + 1, len(models))
 
-            out.print_md(
-                "  before_close: readonly={}, path={}".format(
-                    doc.IsReadOnly,
-                    os.path.basename(doc.PathName) if doc.PathName else "None",
-                )
-            )
-
-            # Синхронизация и закрытие
-            res = closebg.close_with_policy(
-                doc,
-                do_sync=True,
-                comment="Загрузка семейств",
-                dialog_suppressor=dialog_suppressor,
-                source_path=model_path,
-            )
-
-            if not res.get("success"):
-                out.print_md(
-                    ":x: Ошибка закрытия: {}".format(
-                        res.get(
-                            "save_error", res.get("close_error", "Неизвестная ошибка")
-                        )
-                    )
-                )
-                if doc and doc.IsValidObject:
-                    out.print_md(
-                        "  doc_state: readonly={}, path={}".format(
-                            doc.IsReadOnly,
-                            os.path.basename(doc.PathName) if doc.PathName else "None",
-                        )
-                    )
-                if dialog_summary.get("transmitted_dialog_handled"):
-                    out.print_md("  :white_check_mark: transmitted_dialog_handled")
-
-        except Exception as e:
-            out.print_md(":x: Ошибка открытия: `{}`".format(e))
-        finally:
-            if dialog_suppressor:
-                dialog_suppressor.detach()
-
-        out.update_progress(i + 1, len(models))
+    finally:
+        dialog_suppressor.detach()
 
     out.print_md("---")
     out.print_md(
-        "**Готово. Моделей обработано: {}/{}**".format(success_models, len(models))
+        "**Готово. Моделей открыто: {}/{}**".format(success_models, len(models))
     )
 
 
