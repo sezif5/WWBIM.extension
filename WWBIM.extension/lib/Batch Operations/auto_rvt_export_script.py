@@ -10,9 +10,10 @@ import codecs
 import re
 from pyrevit import script, coreutils
 
-lib_path = r"D:\Share\OneDrive - SIYA Project\03_YandexDisk_Vlad\BIM\Scripts\WWBIM.extension\lib"
-if lib_path not in sys.path:
-    sys.path.insert(0, lib_path)
+_this_dir = os.path.dirname(os.path.abspath(__file__))
+_lib_dir = os.path.normpath(os.path.join(_this_dir, os.pardir))
+if _lib_dir not in sys.path:
+    sys.path.insert(0, _lib_dir)
 
 from Autodesk.Revit.DB import (
     ModelPathUtils,
