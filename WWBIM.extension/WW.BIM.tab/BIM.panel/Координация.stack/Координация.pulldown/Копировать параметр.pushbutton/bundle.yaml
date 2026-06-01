@@ -1,0 +1,17 @@
+title:
+  ru: "Копировать параметр"
+  en_us: "Copy Parameter"
+
+tooltip:
+  ru: >-
+    Копирует значение из выбранного параметра в выбранный параметр
+    для выделенных элементов. Поддерживает параметры экземпляра и типа.
+  en_us: >-
+    Copies a value from one selected parameter to another for selected elements.
+    Supports instance and type parameters.
+
+author: Vlad
+help_url: "Error"
+
+min_revit_version: 2020
+max_revit_version: 2024

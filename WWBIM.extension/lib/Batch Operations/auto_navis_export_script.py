@@ -40,6 +40,7 @@ from Autodesk.Revit.DB import (
 )
 from System import Enum
 from System.Collections.Generic import List
+from System.IO import File
 
 # ваши либы
 import openbg
@@ -814,6 +815,14 @@ def export_view_to_nwc(doc, view, target_folder, file_wo_ext):
     return api_ok, out_path
 
 
+def replace_file_ironpython(source_path, target_path):
+    if os.path.exists(target_path):
+        File.Copy(source_path, target_path, True)
+        File.Delete(source_path)
+    else:
+        File.Move(source_path, target_path)
+
+
 def export_view_to_nwc_safe_replace(doc, view, target_nwc_path):
     r"""Безопасный экспорт: сначала во временный файл, затем атомарная замена target."""
     if not target_nwc_path:
@@ -855,11 +864,11 @@ def export_view_to_nwc_safe_replace(doc, view, target_nwc_path):
     backup_created = False
     try:
         if os.path.exists(target_nwc_path):
-            os.replace(target_nwc_path, backup_nwc_path)
+            replace_file_ironpython(target_nwc_path, backup_nwc_path)
             backup_created = True
             log("    Existing NWC moved to backup: {}".format(backup_nwc_path))
 
-        os.replace(temp_nwc_path, target_nwc_path)
+        replace_file_ironpython(temp_nwc_path, target_nwc_path)
         log("    New NWC atomically moved to target: {}".format(target_nwc_path))
 
         if backup_created and os.path.exists(backup_nwc_path):
@@ -880,7 +889,7 @@ def export_view_to_nwc_safe_replace(doc, view, target_nwc_path):
         # Попытка восстановления старого файла
         if backup_created and os.path.exists(backup_nwc_path):
             try:
-                os.replace(backup_nwc_path, target_nwc_path)
+                replace_file_ironpython(backup_nwc_path, target_nwc_path)
                 log("    Old NWC restored from backup")
             except Exception as restore_ex:
                 log("    CRITICAL: Cannot restore old NWC from backup: {}".format(restore_ex))

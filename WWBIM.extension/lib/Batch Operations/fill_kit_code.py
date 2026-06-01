@@ -188,9 +188,8 @@ def IsValidKitCodeValue(value):
     ]
     if not value:
         return False
-    value_upper = value.upper()
     for code in kit_codes:
-        if code in value.upper():
+        if code in value:
             return True
     return False
 

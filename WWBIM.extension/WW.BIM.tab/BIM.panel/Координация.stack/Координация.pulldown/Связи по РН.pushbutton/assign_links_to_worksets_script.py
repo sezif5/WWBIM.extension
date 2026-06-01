@@ -67,17 +67,11 @@ RULES = [
     ({u"ПТ",  u"PT"},                 u"00_Связи_RVT_04_ПТ",    False),
 ]
 
-LAT2CYR = {
-    u"A": u"А", u"B": u"В", u"C": u"С", u"E": u"Е", u"H": u"Н",
-    u"K": u"К", u"M": u"М", u"O": u"О", u"P": u"Р", u"T": u"Т",
-    u"X": u"Х", u"Y": u"У"
-}
 SEG_SPLIT = re.compile(r"[\W_]+", re.UNICODE)
 
 def normalize_cyr(s):
     if not s: return u""
-    up = s.upper()
-    return u"".join(LAT2CYR.get(ch, ch) for ch in up)
+    return s.upper()
 
 def split_segments(text):
     norm = normalize_cyr(text or u"")
