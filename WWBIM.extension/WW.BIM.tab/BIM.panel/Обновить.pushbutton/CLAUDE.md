@@ -50,7 +50,7 @@ EXTENSION_NAME = "WWBIM.extension"
 - Python 2.7+ или Python 3.x (совместим с обоими)
 
 ## GitHub API
-Скрипт использует GitHub API для получения даты последнего коммита:
+Скрипт использует GitHub API для получения SHA, даты и сообщения последнего коммита:
 - **Endpoint:** `GET /repos/{owner}/{repo}/commits/{branch}`
 - **Rate limiting:** 60 запросов/час для неавторизованных запросов
 - Достаточно для одного обновления
