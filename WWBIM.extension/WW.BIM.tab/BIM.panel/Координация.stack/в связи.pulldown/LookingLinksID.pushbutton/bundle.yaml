@@ -5,10 +5,12 @@ title:
 tooltip:
   ru: >-
     1. Введите ID элемента из связанного файла
-    2. 3D вид будет подрезан по элементу
+    2. Активный план, разрез, фасад или 3D-вид будет подрезан по элементу
+    3. Для планов при необходимости можно расширить секущий диапазон
   en_us: >-
     1. Enter the ID of an element from a linked file
-    2. The 3D view will be cropped to the element   
+    2. The active plan, section, elevation, or 3D view will be cropped to the element
+    3. The plan view range can be expanded when necessary
 
 author: Vlad
 help_url: "Error"

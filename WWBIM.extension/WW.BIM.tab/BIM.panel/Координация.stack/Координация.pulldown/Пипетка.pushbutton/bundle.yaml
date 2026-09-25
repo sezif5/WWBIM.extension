@@ -1,0 +1,20 @@
+title:
+  ru: "Пипетка"
+  en_us: "Instance Parameter Pipette"
+
+tooltip:
+  ru: >-
+    Выберите исходный экземпляр семейства, затем последовательно выбирайте
+    другие экземпляры этого же семейства. Значения доступных для записи
+    параметров экземпляра копируются сразу после каждого выбора.
+    Допускаются разные типы одного семейства. Нажмите Esc для завершения.
+  en_us: >-
+    Select a source family instance, then select other instances of the same
+    family. Writable instance parameter values are copied after every pick.
+    Different family types are supported. Press Esc to finish.
+
+author: Vlad
+help_url: "Error"
+
+min_revit_version: 2020
+max_revit_version: 2024

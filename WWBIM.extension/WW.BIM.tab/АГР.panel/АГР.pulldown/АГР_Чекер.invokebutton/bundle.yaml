@@ -1,0 +1,8 @@
+title:
+  ru: "АГР чекер"
+  en_us: "Change\nManager"
+tooltip: проверка
+author: "Vlad"
+context: doc-project
+assembly: IfcAgrChecker_2024.dll
+command: IfcAgrChecker_2024.ExternalCommand

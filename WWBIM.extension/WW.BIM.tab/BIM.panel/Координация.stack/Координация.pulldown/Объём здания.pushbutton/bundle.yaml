@@ -1,0 +1,22 @@
+title:
+  ru: "Объём здания"
+  en_us: "Building Volume"
+
+tooltip:
+  ru: >-
+    Строит проверочный Mass и считает примерный строительный объём
+    здания по заполненному наружному контуру стен. Окна, помещения,
+    внутренние стены и шахты не вычитаются. Перекрытия используются
+    как резервный контур, кровля задаёт переменную верхнюю границу.
+    Фундаментные плиты категории «Несущие фундаменты» также учитываются.
+    Есть упрощённый режим только по контурам горизонтальных плит.
+  en_us: >-
+    Builds a verification Mass from the outer contour of selected envelope
+    elements (walls, floors, roofs) and computes gross building volume
+    using horizontal slices.
+
+author: Vlad
+help_url: "Error"
+
+min_revit_version: 2022
+max_revit_version: 2024

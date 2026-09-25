@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
-# pyRevit button script: 3D-вид по ID элемента в выбранной загруженной связи
+# pyRevit button script: подрезка активного вида по ID элемента в выбранной связи
 # - Всегда показывает список только ЗАГРУЖЕННЫХ связей и просит выбрать,
 #   в какой связи искать элемент по ID.
-# - Использует уже открытый 3D-вид, если он активен,
-#   иначе 3D-вид пользователя вида {3D - Username},
-#   и только если их нет — создаёт новый 3D-вид.
+# - Подрезает активный план, разрез, фасад или 3D-вид.
+# - Для остальных видов использует персональный 3D-вид или создаёт новый.
 # - В Revit 2023+ пытается подсветить КОНКРЕТНЫЙ элемент в связи через
 #   Selection.SetReferences + Reference.CreateLinkReference.
 #   В более старых версиях API выделяется только экземпляр связи.
+
+import math
 
 import clr
 clr.AddReference('System.Windows.Forms')
@@ -17,9 +18,14 @@ from Autodesk.Revit.DB import (
     RevitLinkInstance,
     ElementId,
     View3D,
+    ViewPlan,
+    ViewType,
     ViewFamily,
     ViewFamilyType,
+    PlanViewPlane,
+    PlanViewRange,
     Transaction,
+    TransactionStatus,
     BoundingBoxXYZ,
     XYZ,
     Reference,
@@ -32,6 +38,8 @@ from pyrevit import forms
 
 uidoc = __revit__.ActiveUIDocument
 doc = uidoc.Document
+
+PAD = 3.0
 
 
 def _show(title, text):
@@ -180,6 +188,106 @@ def _get_3d_view_family_type_id():
     return None
 
 
+def _get_box_corners(box):
+    try:
+        box_min = box.Min
+        box_max = box.Max
+        box_transform = box.Transform
+    except:
+        return []
+
+    corners = []
+    for x in (box_min.X, box_max.X):
+        for y in (box_min.Y, box_max.Y):
+            for z in (box_min.Z, box_max.Z):
+                try:
+                    corners.append(box_transform.OfPoint(XYZ(x, y, z)))
+                except:
+                    return []
+    return corners
+
+
+def _get_element_points_in_host(link_inst, linked_el):
+    try:
+        linked_box = linked_el.get_BoundingBox(None)
+    except:
+        linked_box = None
+
+    if linked_box is None:
+        _show(u"Подрезка вида", u"Не удалось получить границы элемента в связи.")
+        return []
+
+    try:
+        link_transform = link_inst.GetTotalTransform()
+    except:
+        link_transform = None
+
+    if link_transform is None:
+        _show(u"Подрезка вида", u"Не удалось получить трансформацию связи.")
+        return []
+
+    host_points = []
+    for point in _get_box_corners(linked_box):
+        try:
+            host_points.append(link_transform.OfPoint(point))
+        except:
+            return []
+    return host_points
+
+
+def _get_bounds_in_box_coordinates(points, box_transform):
+    try:
+        inverse = box_transform.Inverse
+    except:
+        return None
+
+    local_points = []
+    for point in points:
+        try:
+            local_points.append(inverse.OfPoint(point))
+        except:
+            return None
+
+    if not local_points:
+        return None
+
+    return (
+        min([point.X for point in local_points]),
+        min([point.Y for point in local_points]),
+        min([point.Z for point in local_points]),
+        max([point.X for point in local_points]),
+        max([point.Y for point in local_points]),
+        max([point.Z for point in local_points]),
+    )
+
+
+def _create_box_for_points(points, source_box, keep_z=False):
+    try:
+        source_transform = source_box.Transform
+        source_min = source_box.Min
+        source_max = source_box.Max
+    except:
+        return None
+
+    bounds = _get_bounds_in_box_coordinates(points, source_transform)
+    if bounds is None:
+        return None
+
+    min_x, min_y, min_z, max_x, max_y, max_z = bounds
+    if keep_z:
+        min_z = source_min.Z
+        max_z = source_max.Z
+
+    result = BoundingBoxXYZ()
+    try:
+        result.Transform = source_transform
+        result.Min = XYZ(min_x - PAD, min_y - PAD, min_z if keep_z else min_z - PAD)
+        result.Max = XYZ(max_x + PAD, max_y + PAD, max_z if keep_z else max_z + PAD)
+    except:
+        return None
+    return result
+
+
 def _get_existing_or_personal_3d_view():
     """Вернуть уже открытый 3D-вид (если активен) или персональный {3D - Username}.
     Если ни один не найден, вернуть None (в этом случае создадим новый)."""
@@ -210,58 +318,17 @@ def _get_existing_or_personal_3d_view():
     return None
 
 
-def _prepare_3d_view_with_section_box(link_inst, linked_el, element_int_id):
-    """Подготовить 3D-вид и обрезать его по элементу в связи.
-    Использует существующий 3D-вид или персональный, а при их отсутствии создаёт новый.
-    Возвращает View3D либо None."""
-    # Границы элемента в связанном файле
-    try:
-        bb_linked = linked_el.get_BoundingBox(None)
-    except:
-        bb_linked = None
-
-    if bb_linked is None:
-        _show(u"3D вид", u"Не удалось получить границы элемента в связи.")
-        return None
-
-    try:
-        transform = link_inst.GetTotalTransform()
-    except:
-        transform = None
-
-    if transform is None:
-        _show(u"3D вид", u"Не удалось получить трансформацию связи.")
-        return None
-
-    min_pt_link = bb_linked.Min
-    max_pt_link = bb_linked.Max
-
-    # преобразуем в координаты хост-документа
-    min_host = transform.OfPoint(min_pt_link)
-    max_host = transform.OfPoint(max_pt_link)
-
-    min_x = min(min_host.X, max_host.X)
-    min_y = min(min_host.Y, max_host.Y)
-    min_z = min(min_host.Z, max_host.Z)
-
-    max_x = max(min_host.X, max_host.X)
-    max_y = max(min_host.Y, max_host.Y)
-    max_z = max(min_host.Z, max_host.Z)
-
-    # небольшой отступ вокруг элемента (в футах)
-    pad = 3.0
-    min_xyz = XYZ(min_x - pad, min_y - pad, min_z - pad)
-    max_xyz = XYZ(max_x + pad, max_y + pad, max_z + pad)
-
+def _prepare_3d_view_with_section_box(points):
     view3d = None
-
-    t = Transaction(doc, u"3D по ID элемента в связи")
-    t.Start()
+    t = Transaction(doc, u"Подрезка 3D по элементу в связи")
     try:
-        # 1) Пытаемся использовать уже существующий 3D-вид
-        view3d = _get_existing_or_personal_3d_view()
+        t.Start()
+    except:
+        _show(u"3D вид", u"Не удалось начать изменение 3D-вида.")
+        return None
 
-        # 2) Если не нашли — создаём новый
+    try:
+        view3d = _get_existing_or_personal_3d_view()
         if view3d is None:
             vft_id = _get_3d_view_family_type_id()
             if vft_id is None:
@@ -270,10 +337,19 @@ def _prepare_3d_view_with_section_box(link_inst, linked_el, element_int_id):
                 return None
             view3d = View3D.CreateIsometric(doc, vft_id)
 
-        # Обрезка секционным боксом
-        bbox = BoundingBoxXYZ()
-        bbox.Min = min_xyz
-        bbox.Max = max_xyz
+        try:
+            source_box = view3d.GetSectionBox()
+        except:
+            try:
+                source_box = view3d.SectionBox
+            except:
+                source_box = None
+
+        bbox = _create_box_for_points(points, source_box, keep_z=False)
+        if bbox is None:
+            t.RollBack()
+            _show(u"3D вид", u"Не удалось рассчитать секционный бокс.")
+            return None
 
         try:
             view3d.SetSectionBox(bbox)
@@ -285,23 +361,281 @@ def _prepare_3d_view_with_section_box(link_inst, linked_el, element_int_id):
         except:
             pass
 
-        t.Commit()
-    except:
-        t.RollBack()
-        raise
+        status = t.Commit()
+        if status == TransactionStatus.Pending:
+            _show(u"3D вид", u"Revit ожидает обработки предупреждений транзакции.")
+            return None
+        if status != TransactionStatus.Committed:
+            _show(u"3D вид", u"Изменение 3D-вида не было зафиксировано.")
+            return None
+    except Exception as error:
+        try:
+            t.RollBack()
+        except:
+            pass
+        _show(u"3D вид", u"Не удалось подрезать 3D-вид:\n{0}".format(error))
+        return None
 
     return view3d
 
 
-def _select_link_or_element_in_view(view3d, link_inst, linked_el):
-    """Делаем 3D-вид активным и по возможности выделяем КОНКРЕТНЫЙ элемент
+def _is_supported_crop_view(view):
+    try:
+        if view.IsTemplate:
+            return False
+    except:
+        return False
+
+    try:
+        if isinstance(view, ViewPlan):
+            return True
+    except:
+        pass
+
+    try:
+        return view.ViewType in (ViewType.Section, ViewType.Elevation)
+    except:
+        return False
+
+
+def _has_custom_crop_shape(view):
+    try:
+        manager = view.GetCropRegionShapeManager()
+    except:
+        return False
+
+    try:
+        if manager.ShapeSet:
+            return True
+    except:
+        pass
+
+    try:
+        if manager.NumberOfSplitRegions > 1:
+            return True
+    except:
+        pass
+
+    return False
+
+
+def _get_range_plane_data(view, view_range, plane):
+    try:
+        level_id = view_range.GetLevelId(plane)
+    except:
+        return None
+
+    try:
+        if level_id == PlanViewRange.Unlimited:
+            if plane == PlanViewPlane.TopClipPlane:
+                return (None, float("inf"))
+            return (None, float("-inf"))
+    except:
+        pass
+
+    try:
+        level = doc.GetElement(level_id)
+    except:
+        level = None
+
+    if level is None:
+        return None
+
+    try:
+        base_elevation = level.ProjectElevation
+    except:
+        try:
+            base_elevation = level.Elevation
+        except:
+            return None
+
+    try:
+        offset = view_range.GetOffset(plane)
+    except:
+        return None
+
+    return (base_elevation, base_elevation + offset)
+
+
+def _format_elevation(value):
+    try:
+        if math.isinf(value):
+            return u"Без ограничений"
+    except:
+        pass
+    return u"{0:+.3f} м".format(value * 0.3048)
+
+
+def _ask_plan_range_change(view, points):
+    try:
+        view_range = view.GetViewRange()
+    except:
+        return None
+
+    top_data = _get_range_plane_data(view, view_range, PlanViewPlane.TopClipPlane)
+    bottom_data = _get_range_plane_data(view, view_range, PlanViewPlane.BottomClipPlane)
+    depth_data = _get_range_plane_data(view, view_range, PlanViewPlane.ViewDepthPlane)
+    if top_data is None or bottom_data is None or depth_data is None:
+        _show(
+            u"Секущий диапазон",
+            u"Не удалось проверить секущий диапазон. Будет изменена только граница подрезки.",
+        )
+        return None
+
+    element_min_z = min([point.Z for point in points])
+    element_max_z = max([point.Z for point in points])
+    old_top = top_data[1]
+    old_bottom = bottom_data[1]
+    old_depth = depth_data[1]
+    visible_bottom = min(old_bottom, old_depth)
+    if element_max_z >= visible_bottom and element_min_z <= old_top:
+        return None
+
+    new_top = max(old_top, element_max_z + PAD)
+    new_bottom = min(old_bottom, element_min_z - PAD)
+    new_depth = min(old_depth, new_bottom)
+
+    message = (
+        u"Элемент не попадает в текущий секущий диапазон.\n\n"
+        u"Текущий диапазон:\n"
+        u"Верх: {0}\nНиз: {1}\nГлубина: {2}\n\n"
+        u"Новый диапазон:\n"
+        u"Верх: {3}\nНиз: {4}\nГлубина: {5}\n\n"
+        u"Изменить секущий диапазон?\n"
+        u"При выборе «Нет» изменится только граница подрезки, и элемент может остаться невидимым."
+    ).format(
+        _format_elevation(old_top),
+        _format_elevation(old_bottom),
+        _format_elevation(old_depth),
+        _format_elevation(new_top),
+        _format_elevation(new_bottom),
+        _format_elevation(new_depth),
+    )
+
+    try:
+        accepted = forms.alert(
+            message,
+            title=u"Секущий диапазон",
+            yes=True,
+            no=True,
+            warn_icon=True,
+        )
+    except:
+        accepted = False
+
+    if not accepted:
+        return None
+
+    changes = []
+    for plane, plane_data, new_elevation in (
+        (PlanViewPlane.TopClipPlane, top_data, new_top),
+        (PlanViewPlane.BottomClipPlane, bottom_data, new_bottom),
+        (PlanViewPlane.ViewDepthPlane, depth_data, new_depth),
+    ):
+        base_elevation, old_elevation = plane_data
+        if base_elevation is None or abs(new_elevation - old_elevation) < 0.000001:
+            continue
+        changes.append((plane, base_elevation, new_elevation))
+
+    return (view_range, changes) if changes else None
+
+
+def _crop_active_view(view, points, range_change):
+    try:
+        source_box = view.CropBox
+    except:
+        source_box = None
+
+    try:
+        is_plan = isinstance(view, ViewPlan)
+    except:
+        is_plan = False
+
+    crop_box = _create_box_for_points(points, source_box, keep_z=is_plan)
+    if crop_box is None:
+        return False
+
+    t = Transaction(doc, u"Подрезка вида по элементу в связи")
+    try:
+        t.Start()
+    except:
+        return False
+
+    try:
+        if range_change is not None:
+            view_range, changes = range_change
+            for plane, base_elevation, new_elevation in changes:
+                view_range.SetOffset(plane, new_elevation - base_elevation)
+            view.SetViewRange(view_range)
+
+        view.CropBox = crop_box
+        view.CropBoxActive = True
+        status = t.Commit()
+        if status == TransactionStatus.Pending:
+            return None
+        return status == TransactionStatus.Committed
+    except:
+        try:
+            t.RollBack()
+        except:
+            pass
+        return False
+
+
+def _prepare_view_with_crop(link_inst, linked_el):
+    points = _get_element_points_in_host(link_inst, linked_el)
+    if not points:
+        return None
+
+    try:
+        active_view = uidoc.ActiveView
+    except:
+        active_view = None
+
+    try:
+        if isinstance(active_view, View3D):
+            return _prepare_3d_view_with_section_box(points)
+    except:
+        pass
+
+    if active_view is not None and _is_supported_crop_view(active_view):
+        if _has_custom_crop_shape(active_view):
+            _show(
+                u"Фигурная подрезка",
+                u"Активный вид имеет фигурную или разделённую подрезку. Она не будет изменена; элемент будет открыт в 3D.",
+            )
+        else:
+            try:
+                is_plan = isinstance(active_view, ViewPlan)
+            except:
+                is_plan = False
+            range_change = _ask_plan_range_change(active_view, points) if is_plan else None
+            crop_result = _crop_active_view(active_view, points, range_change)
+            if crop_result is True:
+                return active_view
+            if crop_result is None:
+                _show(
+                    u"Подрезка вида",
+                    u"Revit ожидает обработки предупреждений транзакции. Повторите команду после их закрытия.",
+                )
+                return None
+            _show(
+                u"Подрезка вида",
+                u"Не удалось изменить подрезку активного вида. Элемент будет открыт в 3D.",
+            )
+
+    return _prepare_3d_view_with_section_box(points)
+
+
+def _select_link_or_element_in_view(target_view, link_inst, linked_el):
+    """Делаем целевой вид активным и по возможности выделяем КОНКРЕТНЫЙ элемент
     в связи (через Selection.SetReferences + Reference.CreateLinkReference).
     Если API этого не поддерживает, просто выделяем экземпляр связи."""
-    if view3d is None:
+    if target_view is None:
         return
 
     try:
-        uidoc.ActiveView = view3d
+        uidoc.ActiveView = target_view
     except:
         return
 
@@ -352,8 +686,8 @@ def main():
     if link_inst is None or linked_el is None:
         return
 
-    view3d = _prepare_3d_view_with_section_box(link_inst, linked_el, element_int_id)
-    _select_link_or_element_in_view(view3d, link_inst, linked_el)
+    target_view = _prepare_view_with_crop(link_inst, linked_el)
+    _select_link_or_element_in_view(target_view, link_inst, linked_el)
 
 
 if __name__ == "__main__":

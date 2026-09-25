@@ -1,0 +1,10 @@
+title:
+  ru: "Разделители в\nграницы зон"
+  en_us: "Room separators\nto area boundaries"
+tooltip:
+  ru: "Копирует выделенные разделители помещений на выбранный план площадей как границы зон. Существующие линии не удаляются."
+  en_us: "Copies selected room separation lines to an area plan as area boundary lines. Existing lines are preserved."
+author: "WWBIM"
+context: doc-project
+min_revit_version: 2022
+max_revit_version: 2024

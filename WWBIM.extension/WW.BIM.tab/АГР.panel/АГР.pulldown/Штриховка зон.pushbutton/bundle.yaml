@@ -1,0 +1,10 @@
+title:
+  ru: "Штриховка\nзон"
+  en_us: "Area\nhatches"
+tooltip:
+  ru: "Создать сплошные закрашенные области по расчетным границам площадей активного плана; при повторном запуске обновить только области этой команды."
+  en_us: "Create and refresh solid filled regions from areas on the active area plan."
+author: "WWBIM"
+context: doc-project
+min_revit_version: 2022
+max_revit_version: 2024
